@@ -6,13 +6,14 @@ import { analyzeNavigationFrame, analyzeSmartAssistant, classifyUserIntent } fro
 import { speak, stopSpeaking } from './services/speechService';
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 
-// Navigation loop interval (ms)
-const NAV_INTERVAL_MS = 8000;
+// Navigation loop interval (ms) - REDUCED for Real-time feel
+// 2500ms is a good balance between "Real-time" and Rate Limiting
+const NAV_INTERVAL_MS = 2500;
 
 // Webcam configuration
 const videoConstraints = {
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
+  width: { ideal: 640 }, // Lower resolution for faster upload/processing
+  height: { ideal: 480 },
   facingMode: "environment"
 };
 
@@ -76,8 +77,8 @@ const App: React.FC = () => {
     }
     setMode(AppMode.NAVIGATING);
     setIsProMode(false);
-    setLastMessage("Starting Navigation...");
-    speak("Starting navigation mode.");
+    setLastMessage("Navigation Active");
+    speak("Navigation started.");
   }, [cameraError]);
 
   const handleSmartQuery = useCallback(async (query: string, usePro: boolean) => {
@@ -87,13 +88,13 @@ const App: React.FC = () => {
     }
     setMode(AppMode.READING);
     setIsProMode(usePro);
-    setLastMessage(usePro ? "Deep analyzing..." : "Thinking...");
+    setLastMessage(usePro ? "Deep analyzing..." : "Looking...");
     
-    if (usePro) speak("Analyzing."); 
+    // Immediate feedback
+    if (usePro) speak("Analyzing.");
 
     // Small delay to allow UI to update
     setTimeout(async () => {
-      // Check if user cancelled while waiting
       if (modeRef.current === AppMode.IDLE || !webcamRef.current) return;
 
       const imageSrc = webcamRef.current.getScreenshot();
@@ -101,11 +102,7 @@ const App: React.FC = () => {
       if (imageSrc) {
         const response = await analyzeSmartAssistant(imageSrc, query, location, usePro);
         
-        // Check if user cancelled during await
-        if (modeRef.current === AppMode.IDLE) {
-            console.log("Response discarded (User stopped app)");
-            return; 
-        }
+        if (modeRef.current === AppMode.IDLE) return;
 
         if (response === "QUOTA_EXCEEDED") {
            setLastMessage("Quota exceeded.");
@@ -118,23 +115,44 @@ const App: React.FC = () => {
         speak(response);
         setMode(AppMode.IDLE); 
       } else {
-        setLastMessage("Camera image failed.");
+        setLastMessage("Camera failed.");
         setMode(AppMode.IDLE);
       }
-    }, 200);
+    }, 100);
   }, [cameraError, location]);
 
   const handleTranscribedCommand = useCallback(async (transcript: string) => {
     if (!transcript) return;
     
-    // Stop any current activity first
-    handleStop();
+    const lower = transcript.toLowerCase();
+
+    // --- 1. LOCAL INTENT CHECK (Instant Latency Fix) ---
+    // Bypass AI for common keywords to make it feel instant
+    if (lower.includes("stop") || lower.includes("pause") || lower.includes("quit")) {
+        handleStop();
+        return;
+    }
+
+    // Stop current speech to listen/process new command
+    handleStop(); 
     setLastMessage("Processing...");
-    
+
+    // Fast-path for Navigation
+    if (lower.includes("nav") || lower.includes("walk") || lower.includes("go") || lower.includes("start")) {
+        handleStartNav();
+        return;
+    }
+
+    // Fast-path for Basic Chat (Hello/Describe)
+    if (lower.includes("hello") || lower.includes("hi") || lower.includes("what") || lower.includes("describe")) {
+        handleSmartQuery(transcript, false); // False = Use Flash (Fast)
+        return;
+    }
+
+    // --- 2. AI INTENT CHECK (Fallback for complex queries) ---
     const intent = await classifyUserIntent(transcript);
     console.log("Intent detected:", intent);
 
-    // If user stopped app while classifying, abort
     if (modeRef.current === AppMode.IDLE && mode !== AppMode.IDLE) return;
 
     if (intent === 'NAVIGATION') {
@@ -170,6 +188,7 @@ const App: React.FC = () => {
       speak(safetyInfo);
     }
 
+    // Re-schedule
     if (modeRef.current === AppMode.NAVIGATING) {
       navLoopTimer.current = setTimeout(runNavLoop, NAV_INTERVAL_MS);
     }

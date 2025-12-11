@@ -1,25 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
 import { GeoLocation } from "../types";
 
-// Lazy initialization to prevent crash on module load
+// Lazy initialization
 let aiInstance: GoogleGenAI | null = null;
 
 const getAI = () => {
   if (!aiInstance) {
-    // Ensure process.env.API_KEY exists or handle gracefully
     const apiKey = process.env.API_KEY || "";
-    if (!apiKey) {
-      console.warn("API_KEY is missing from process.env");
-    }
+    if (!apiKey) console.warn("API_KEY is missing");
     aiInstance = new GoogleGenAI({ apiKey });
   }
   return aiInstance;
 };
 
-/**
- * UTILITY: Clean text for Text-to-Speech
- * Removes markdown symbols that sound bad when read aloud.
- */
 const cleanTextForSpeech = (text: string): string => {
   if (!text) return "";
   return text
@@ -29,32 +22,22 @@ const cleanTextForSpeech = (text: string): string => {
     .trim();
 };
 
-/**
- * Router Lane: Intent Classifier
- * MODEL: gemini-2.5-flash
- * PURPOSE: Decides between Navigation, Simple Chat (Flash), or Advanced (Pro).
- */
 export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'CHAT' | 'ADVANCED'> => {
   try {
     const ai = getAI();
-    // Quick keyword check to save latency
-    const lower = command.toLowerCase();
-    if (lower.startsWith('hello') || lower.startsWith('hi ')) return 'CHAT';
+    // Local fallback is handled in App.tsx mostly, this is for edge cases
     
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
         parts: [{ 
             text: `Role: Intent Classifier.
-Context: User is visually impaired.
-Definitions:
-1. NAVIGATION (Flash): Movement, walking, finding exits, finding bathrooms, "Where is the door?", "Am I safe?".
-2. CHAT (Flash): **DEFAULT.** "Hello", "Hi", "What is this?", "Describe the room", "What is in front of me?", Colors, Lights.
-3. ADVANCED (Pro): **STRICTLY ONLY FOR:** Reading dense text (OCR), Reading documents, or explicit requests for "Deep/Detailed analysis".
-
 Command: "${command}"
-
-Task: Output one word: NAVIGATION, CHAT, or ADVANCED.` 
+Task: Output one word: NAVIGATION, CHAT, or ADVANCED.
+Rules:
+- Movement/Safety/Walk -> NAVIGATION
+- Read/Text/Sign/Analyze -> ADVANCED
+- Hello/Describe/Object -> CHAT` 
         }]
       },
       config: {
@@ -68,7 +51,6 @@ Task: Output one word: NAVIGATION, CHAT, or ADVANCED.`
     if (text?.includes('ADVANCED')) return 'ADVANCED';
     return 'CHAT'; 
   } catch (error) {
-    console.warn("Intent fallback triggered.", error);
     const lower = command.toLowerCase();
     if (lower.includes('nav') || lower.includes('walk') || lower.includes('go')) return 'NAVIGATION';
     if (lower.includes('read') && lower.includes('text')) return 'ADVANCED';
@@ -78,7 +60,7 @@ Task: Output one word: NAVIGATION, CHAT, or ADVANCED.`
 
 /**
  * Fast Lane: Navigation Mode
- * MODEL: gemini-2.5-flash
+ * CRITICAL UPDATE: Prompt now forces SPATIAL DIRECTION and ACTION.
  */
 export const analyzeNavigationFrame = async (base64Image: string): Promise<string> => {
   try {
@@ -90,27 +72,27 @@ export const analyzeNavigationFrame = async (base64Image: string): Promise<strin
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-          { text: `Role: SonarAI (Blind Guide).
-Input: Camera view.
-Task: Navigation & Safety.
-Output: JSON.
+          { text: `Role: Blind Guide.
+Input: User View (User is walking forward).
+Task: Give immediate DIRECTIONAL command.
 
-Output Rules:
-- "navigation_command": MAX 8 WORDS. Imperative. No filler.
-- If safe: "Path clear. Continue."
-- If hazard: "Stop. Chair ahead."
+Rules:
+1. Identify immediate obstacles in the path.
+2. Give relative direction: "To your left", "On your right", "12 o'clock".
+3. Use ACTION verbs: "Veer left", "Stop", "Continue", "Step up".
+4. If path is clear, describe the space briefly: "Hallway clear." or "Open room."
 
-JSON Schema:
+Response format: JSON.
 {
-  "navigation_command": "string",
-  "safety_status": "SAFE" | "CAUTION" | "STOP"
+  "command": "Short spoken command (Max 10 words). e.g., 'Stop. Table 12 o'clock.' or 'Veer right, person ahead.'",
+  "hazard": boolean
 }` 
           }
         ]
       },
       config: {
-        temperature: 0.3,
-        maxOutputTokens: 300, // Increased to prevent JSON truncation
+        temperature: 0.1, // Low temp for precision
+        maxOutputTokens: 150,
         responseMimeType: 'application/json' 
       }
     });
@@ -120,9 +102,8 @@ JSON Schema:
     
     try {
         const data = JSON.parse(jsonText);
-        return cleanTextForSpeech(data.navigation_command || "Path clear.");
+        return cleanTextForSpeech(data.command || "Path clear.");
     } catch (e) {
-        // If JSON fails (likely cut off), try to salvage text or default
         return "Path clear.";
     }
 
@@ -134,7 +115,7 @@ JSON Schema:
 
 /**
  * Smart Assistant Mode (Hybrid)
- * MODEL: Switches between 'gemini-2.5-flash' (Chat) and 'gemini-3-pro-preview' (Advanced)
+ * CRITICAL UPDATE: Prompt forces SPATIAL CONTEXT even in chat.
  */
 export const analyzeSmartAssistant = async (
   base64Image: string, 
@@ -145,7 +126,6 @@ export const analyzeSmartAssistant = async (
   const ai = getAI();
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
-  // Tools (Maps) - Only for location queries
   const tools: any[] = [];
   if (location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
     tools.push({ googleMaps: {} });
@@ -155,24 +135,20 @@ export const analyzeSmartAssistant = async (
     retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
   } : undefined;
 
-  // Context-aware prompt to handle greetings vs queries
-  const promptText = `Role: Friendly Vision Assistant for the blind.
+  const promptText = `Role: Vision Assistant.
 User Audio: "${userPrompt}"
-Context: You are seeing what is in front of the user (or the user themselves if facing the camera).
-
+Context: You are the user's eyes.
 Instructions:
-1. **Greetings ("Hello", "Hi")**: Reply warmly, then briefly describe the scene. (e.g. "Hello! I see a desk in front of you.")
-2. **Identification ("What is this?")**: Directly identify the object.
-3. **General**: Speak naturally and clearly. Keep responses helpful and around 2-3 sentences.
-4. **NO Markdown**.`;
+1. **Greetings/General**: If user says "Hello", describe **WHERE** objects are relative to them. (e.g., "Hello. You are facing a window. There is a desk to your right.")
+2. **Identification**: Be specific.
+3. **Guidance**: If the user asks what to do, give direction.
+
+Keep it conversational but SPATIALLY ACCURATE.`;
 
   const modelName = useProModel ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
-  // Increased tokens to prevent mid-sentence cutoff
   const tokenLimit = useProModel ? 4096 : 500; 
 
   try {
-    console.log(`Analyzing with ${modelName}...`);
-    
     const response = await ai.models.generateContent({
       model: modelName,
       contents: {
@@ -184,7 +160,7 @@ Instructions:
       config: {
         tools: tools.length > 0 ? tools : undefined,
         toolConfig: toolConfig,
-        temperature: 0.7, 
+        temperature: 0.6, 
         maxOutputTokens: tokenLimit,
       }
     });
