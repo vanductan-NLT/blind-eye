@@ -32,7 +32,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setMounted(true);
-    return () => stopSession(); // Cleanup on unmount
+    return () => {
+        // Cleanup on unmount - bypass stopSession to avoid state updates on unmounted component
+        if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+        if (liveClientRef.current) liveClientRef.current.disconnect();
+    }; 
   }, []);
 
   const handleCameraError = useCallback((error: string | DOMException) => {
@@ -43,9 +47,29 @@ const App: React.FC = () => {
 
   // --- Session Management ---
 
+  const stopSession = useCallback(() => {
+    if (frameIntervalRef.current) {
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
+    }
+    
+    // CRITICAL FIX: Capture and nullify ref BEFORE calling disconnect 
+    // to prevent recursion (disconnect -> onStatusChange -> stopSession -> disconnect...)
+    const client = liveClientRef.current;
+    if (client) {
+      liveClientRef.current = null;
+      client.disconnect();
+    }
+    
+    setMode(AppMode.IDLE);
+    setStatusText("Ready");
+  }, []);
+
   const startSession = useCallback(async () => {
     if (cameraError) return;
     
+    // Ensure clean state
+    stopSession();
     // Stop any browser TTS from previous modes
     stopBrowserTTS();
 
@@ -55,10 +79,16 @@ const App: React.FC = () => {
     liveClientRef.current = new LiveClient({
       onAudioData: () => {}, // Not used in this UI yet
       onStatusChange: (status) => {
-        if (status === 'disconnected' || status === 'error') {
-           setMode(AppMode.IDLE);
-           setStatusText(status === 'error' ? "Connection Error" : "Ready");
-           stopSession();
+        if (status === 'disconnected') {
+           // We only need to react if we think we are still connected
+           if (liveClientRef.current) {
+               stopSession();
+           }
+        } else if (status === 'error') {
+           setStatusText("Connection Error");
+           if (liveClientRef.current) {
+               stopSession();
+           }
         } else if (status === 'connected') {
            setStatusText("Live Navigation Active");
         }
@@ -69,6 +99,7 @@ const App: React.FC = () => {
 
     // Start Video Stream Loop
     frameIntervalRef.current = setInterval(() => {
+      // Check ref again inside interval to ensure we don't send if stopped
       if (webcamRef.current && liveClientRef.current) {
         const imageSrc = webcamRef.current.getScreenshot();
         if (imageSrc) {
@@ -77,22 +108,7 @@ const App: React.FC = () => {
       }
     }, 1000 / VIDEO_FPS);
 
-  }, [cameraError]);
-
-  const stopSession = useCallback(() => {
-    if (frameIntervalRef.current) {
-      clearInterval(frameIntervalRef.current);
-      frameIntervalRef.current = null;
-    }
-    
-    if (liveClientRef.current) {
-      liveClientRef.current.disconnect();
-      liveClientRef.current = null;
-    }
-    
-    setMode(AppMode.IDLE);
-    setStatusText("Ready");
-  }, []);
+  }, [cameraError, stopSession]);
 
   const toggleSession = () => {
     if (mode === AppMode.IDLE) {
