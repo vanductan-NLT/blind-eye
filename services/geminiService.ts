@@ -5,35 +5,39 @@ import { GeoLocation } from "../types";
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 /**
+ * UTILITY: Clean text for Text-to-Speech
+ * Removes markdown symbols that sound bad when read aloud (e.g., "asterisk", "dash").
+ */
+const cleanTextForSpeech = (text: string): string => {
+  if (!text) return "";
+  return text
+    .replace(/[*#_`~]/g, '') // Remove Markdown bold/italic/headers
+    .replace(/^[\s\-\.]+/gm, '') // Remove bullet points at start of lines
+    .replace(/\s+/g, ' ') // Collapse extra whitespace
+    .trim();
+};
+
+/**
  * Router Lane: Intent Classifier
  * MODEL: gemini-2.5-flash
- * PURPOSE: Decides if the user wants continuous navigation or specific analysis.
+ * PURPOSE: Decides between Navigation, Simple Chat, or Advanced Analysis.
  */
-export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'ANALYSIS'> => {
+export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'CHAT' | 'ADVANCED'> => {
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
         parts: [{ 
-            text: `Role: Intent Classifier for a Blind Assistant App.
-Context: The user is visually impaired and giving a voice command.
-
+            text: `Role: Intent Classifier for a Blind Assistant.
+Context: User is visually impaired.
 Definitions:
-1. NAVIGATION (Uses Fast Gemini Flash):
-   - ANY request to move, walk, go somewhere, or find a path.
-   - Finding exits, doors, or bathrooms *for the purpose of going there*.
-   - Safety checks while moving.
-   - Keywords: "Navigate", "Walk", "Go", "Guide", "Exit", "Path", "Door", "Safe", "Start".
-   - Examples: "Navigate me out", "I want to leave", "Find the door", "Walk to kitchen", "Am I safe?", "Get me out of this room".
-
-2. ANALYSIS (Uses Slow Gemini Pro):
-   - Requests to read text, describe a static scene, or identify small objects.
-   - Questions that require deep reasoning or detailed visual inspection without immediate movement.
-   - Examples: "Read this label", "What color is this?", "Describe the room layout", "Is this a $10 bill?", "What is in front of me?".
+1. NAVIGATION: Movement, finding paths/exits/bathrooms, safety checks while walking. (Output: NAVIGATION)
+2. CHAT: General Q&A, greetings, simple object identification ("What is this?"), color check, light check. Quick answers. (Output: CHAT)
+3. ADVANCED: Reading text (OCR), "Describe in detail", complex reasoning, analysis of documents/bills. (Output: ADVANCED)
 
 Command: "${command}"
 
-Task: Output exactly one word: NAVIGATION or ANALYSIS.` 
+Task: Output exactly one word: NAVIGATION, CHAT, or ADVANCED.` 
         }]
       },
       config: {
@@ -44,24 +48,20 @@ Task: Output exactly one word: NAVIGATION or ANALYSIS.`
 
     const text = response.text?.trim().toUpperCase();
     if (text?.includes('NAV')) return 'NAVIGATION';
-    return 'ANALYSIS'; 
+    if (text?.includes('ADVANCED') || text?.includes('READ')) return 'ADVANCED';
+    return 'CHAT'; 
   } catch (error) {
-    console.warn("Intent classification failed, falling back to keyword matching.", error);
-    // Fallback logic
+    console.warn("Intent classification failed, falling back to simple logic.", error);
     const lower = command.toLowerCase();
-    const navKeywords = ['nav', 'walk', 'go', 'guide', 'start', 'exit', 'door', 'path', 'move', 'leave'];
-    
-    if (navKeywords.some(k => lower.includes(k))) {
-        return 'NAVIGATION';
-    }
-    return 'ANALYSIS';
+    if (lower.includes('nav') || lower.includes('walk') || lower.includes('go') || lower.includes('exit')) return 'NAVIGATION';
+    if (lower.includes('read') || lower.includes('describe') || lower.includes('detail')) return 'ADVANCED';
+    return 'CHAT';
   }
 };
 
 /**
  * Fast Lane: Navigation Mode
  * MODEL: gemini-2.5-flash
- * PURPOSE: Real-time safety and path guidance. Fast, short, actionable.
  */
 export const analyzeNavigationFrame = async (base64Image: string): Promise<string> => {
   try {
@@ -71,86 +71,94 @@ export const analyzeNavigationFrame = async (base64Image: string): Promise<strin
       model: 'gemini-2.5-flash',
       contents: {
         parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: cleanBase64
-            }
-          },
-          {
-            text: `Role: Guide for a blind user.
-Input: Real-time camera view.
-Task: Identify the main safe path and any immediate hazards.
-Output: A clear, spoken sentence.
-Constraints:
-- No bullet points.
-- Be direct and actionable.
-- Length: 10-20 words.
-Examples:
-- "The path ahead is clear, you can walk forward confidently."
-- "Stop immediately. There is a closed glass door directly in front of you."
-- "There is a chair on your right, move slightly left to avoid it and continue straight."`
+          { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+          { text: `Role: You are "SonarAI," an advanced spatial navigation engine for the visually impaired.
+Input: A camera frame from the user's perspective (frontal view).
+User Intent: The user is walking indoors and needs immediate, actionable safety guidance.
+
+CORE REASONING PROCESS (Thinking Chain):
+1. Scan & Detect: Identify dynamic hazards (people, closing doors), static obstacles (chairs, bags), and navigational signs (Exit, Room Numbers, Warnings like "Wet Floor").
+2. Spatial Parsing: Determine the "Walkable Path". Is it clear? Is it blocked?
+3. Semantic Analysis: If text is detected (e.g., "WET FLOOR"), prioritize this as a HIGH-LEVEL HAZARD even if the path looks physically clear.
+4. Coordinate Mapping: Locate the center of the primary target or the safest path gap on a horizontal axis from 0.0 (Left) to 1.0 (Right).
+
+OUTPUT FORMAT (Strict JSON Only):
+{
+  "safety_status": "SAFE" | "CAUTION" | "STOP",
+  "reasoning_summary": "Detected wet floor sign directly in path.",
+  "navigation_command": "Short, imperative voice command (Max 8 words). E.g., 'Stop. Wet floor sign ahead. Go left.'",
+  "stereo_pan": 0.0, // A float between -1.0 (Left) and 1.0 (Right) representing where the clear path or target is. 0.0 is Center.
+  "visual_debug": {
+    "hazards": [ {"label": "Bag", "box_2d": [ymin, xmin, ymax, xmax]} ], // For drawing red boxes
+    "safe_path": [ {"label": "Path", "box_2d": [ymin, xmin, ymax, xmax]} ] // For drawing green boxes
+  }
+}` 
           }
         ]
       },
       config: {
-        temperature: 0.3,
-        // Increased to 150 to ensure sentences aren't cut off
-        maxOutputTokens: 150, 
+        temperature: 0.5,
+        maxOutputTokens: 500,
+        responseMimeType: 'application/json' 
       }
     });
 
-    return response.text || "Path clear.";
+    const jsonText = response.text;
+    if (!jsonText) return "Path clear.";
+    
+    try {
+        const data = JSON.parse(jsonText);
+        return cleanTextForSpeech(data.navigation_command || "Path clear.");
+    } catch (e) {
+        console.warn("SonarAI JSON parse error", e);
+        return "Path clear.";
+    }
+
   } catch (error: any) {
     const errorMsg = error.toString();
-    console.error("Nav Error:", errorMsg);
-    
-    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED") || errorMsg.includes("quota")) {
-      return "QUOTA_EXCEEDED";
-    }
+    if (errorMsg.includes("429") || errorMsg.includes("quota")) return "QUOTA_EXCEEDED";
     return "Navigation active.";
   }
 };
 
 /**
- * Smart Lane: Assistant Mode
- * MODEL: gemini-3-pro-preview
- * PURPOSE: Deep analysis, reading text, describing details. 
- * NOTE: High token limit (4096) to prevent cut-offs.
+ * Smart Assistant Mode (Hybrid)
+ * MODEL: Switches between 'gemini-2.5-flash' (Chat) and 'gemini-3-pro-preview' (Advanced)
  */
 export const analyzeSmartAssistant = async (
   base64Image: string, 
-  userPrompt: string = "Describe this scene in detail.",
-  location?: GeoLocation
+  userPrompt: string,
+  location?: GeoLocation,
+  useProModel: boolean = false
 ): Promise<string> => {
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
-  // Tools configuration (Google Search/Maps) - Only used for location queries
+  // Tools (Maps) - Only for location queries
   const tools: any[] = [];
   if (location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
     tools.push({ googleMaps: {} });
   }
 
   const toolConfig = tools.length > 0 && location ? {
-    retrievalConfig: {
-      latLng: {
-        latitude: location.latitude,
-        longitude: location.longitude
-      }
-    }
+    retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
   } : undefined;
 
-  const promptText = `Role: Intelligent Vision Assistant for the visually impaired.
+  // Optimized System Prompt for Audio Output
+  const promptText = `Role: Vision Assistant.
 User Query: "${userPrompt}"
 Instructions:
-- Provide a helpful, natural language response.
-- If there is text in the image, read it out clearly.
-- If describing a scene, paint a picture with words (colors, objects, layout).
-- Be thorough but prioritizing safety and key information.`;
+- Output PLAIN TEXT ONLY. NO Markdown (no * or # or -).
+- Keep it CONCISE and conversational (max 2 sentences unless reading text).
+- If reading text, read it naturally.
+- If identifying objects, be direct.`;
 
-  // Helper to call API
-  const callModel = async (modelName: string, maxTokens: number) => {
-    return await ai.models.generateContent({
+  const modelName = useProModel ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+  const tokenLimit = useProModel ? 4096 : 1024; // Pro needs room to think/read, Flash needs speed
+
+  try {
+    console.log(`Analyzing with ${modelName}...`);
+    
+    const response = await ai.models.generateContent({
       model: modelName,
       contents: {
         parts: [
@@ -162,8 +170,7 @@ Instructions:
         tools: tools.length > 0 ? tools : undefined,
         toolConfig: toolConfig,
         temperature: 0.4,
-        maxOutputTokens: maxTokens, 
-        // Lower safety settings to ensure we get a description even for "sensitive" things like medicines or street signs
+        maxOutputTokens: tokenLimit,
         safetySettings: [
             { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_ONLY_HIGH },
@@ -172,36 +179,20 @@ Instructions:
         ]
       }
     });
-  };
-
-  try {
-    // Attempt High-Intelligence Model (Gemini 3)
-    console.log("Attempting Gemini 3...");
-    // CRITICAL FIX: Increased tokens to 4096 to prevent MAX_TOKENS error with empty content
-    const response = await callModel('gemini-3-pro-preview', 4096);
     
-    if (!response.text) {
-        console.warn("Gemini 3 returned empty text. Candidates:", response.candidates);
-        throw new Error("Empty response from Gemini 3");
-    }
-    return response.text;
+    if (!response.text) throw new Error("Empty response");
+    
+    // Clean the text before returning to UI/TTS
+    return cleanTextForSpeech(response.text);
 
   } catch (error: any) {
-    const errorMsg = error.toString();
-    console.warn("Gemini 3 failed or returned empty, falling back to Flash.", errorMsg);
-
-    if (errorMsg.includes("429") || errorMsg.includes("RESOURCE_EXHAUSTED")) {
-      return "QUOTA_EXCEEDED";
+    console.warn(`${modelName} failed`, error);
+    if (error.toString().includes("quota")) return "QUOTA_EXCEEDED";
+    
+    // Simple fallback if it was a pro request that failed
+    if (useProModel) {
+        return "I had trouble analyzing the details. Try again.";
     }
-
-    // Fallback to Gemini 2.5 Flash only if Pro fails
-    try {
-      console.log("Attempting Gemini 2.5 Flash fallback...");
-      const response = await callModel('gemini-2.5-flash', 1024);
-      return response.text || "I can't see anything clearly right now.";
-    } catch (fallbackError: any) {
-      console.error("Fallback failed:", fallbackError);
-      return "I am having trouble connecting to the vision service.";
-    }
+    return "I couldn't see that clearly.";
   }
 };

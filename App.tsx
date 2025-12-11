@@ -21,8 +21,11 @@ const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
   const [lastMessage, setLastMessage] = useState<string>("");
   const [location, setLocation] = useState<GeoLocation | undefined>(undefined);
+  // Track if we are using Pro model for UI feedback
+  const [isProMode, setIsProMode] = useState(false);
   
-  const navLoopTimer = useRef<NodeJS.Timeout | null>(null);
+  // Fix: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout for browser compatibility
+  const navLoopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- Geolocation ---
   useEffect(() => {
@@ -44,7 +47,7 @@ const App: React.FC = () => {
     
     // Stop any existing output/loops first
     handleStop();
-    setLastMessage("Processing command...");
+    setLastMessage("Processing...");
     
     // Use Gemini Flash to classify intent
     const intent = await classifyUserIntent(transcript);
@@ -53,8 +56,9 @@ const App: React.FC = () => {
     if (intent === 'NAVIGATION') {
       handleStartNav();
     } else {
-      // Pass the original transcript as the query (e.g., "Read this text")
-      handleSmartQuery(transcript);
+      // Intent is either 'CHAT' (Flash) or 'ADVANCED' (Pro)
+      const usePro = intent === 'ADVANCED';
+      handleSmartQuery(transcript, usePro);
     }
 
   }, []);
@@ -65,6 +69,7 @@ const App: React.FC = () => {
 
   const handleStartNav = () => {
     setMode(AppMode.NAVIGATING);
+    setIsProMode(false);
     setLastMessage("Starting Navigation...");
     speak("Starting navigation mode.");
   };
@@ -75,14 +80,16 @@ const App: React.FC = () => {
       navLoopTimer.current = null;
     }
     setMode(AppMode.IDLE);
+    setIsProMode(false);
     stopSpeaking();
     setLastMessage("Paused.");
   };
 
-  const handleSmartQuery = async (query: string) => {
+  const handleSmartQuery = async (query: string, usePro: boolean) => {
     setMode(AppMode.READING);
-    setLastMessage("Thinking...");
-    speak("Checking."); // Feedback that input was received
+    setIsProMode(usePro);
+    setLastMessage(usePro ? "Deep analyzing..." : "Thinking...");
+    speak(usePro ? "Analyzing details." : "Checking."); 
 
     // Small delay to ensure webcam frame is fresh after button press
     setTimeout(async () => {
@@ -90,7 +97,8 @@ const App: React.FC = () => {
       const imageSrc = webcamRef.current.getScreenshot();
       
       if (imageSrc) {
-        const response = await analyzeSmartAssistant(imageSrc, query, location);
+        // Pass the usePro flag to service
+        const response = await analyzeSmartAssistant(imageSrc, query, location, usePro);
         
         if (response === "QUOTA_EXCEEDED") {
            setLastMessage("Quota exceeded.");
@@ -164,6 +172,7 @@ const App: React.FC = () => {
         isListening={isListening}
         onMicClick={handleMicClick}
         onStop={handleStop}
+        isProMode={isProMode}
       />
     </div>
   );

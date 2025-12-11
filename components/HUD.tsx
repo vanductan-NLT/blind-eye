@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Eye, Mic, Navigation, MicOff } from 'lucide-react';
+import { Activity, Eye, Mic, Navigation, MicOff, Sparkles } from 'lucide-react';
 import { AppMode } from '../types';
 
 interface HUDProps {
@@ -8,9 +8,10 @@ interface HUDProps {
   isListening: boolean;
   onMicClick: () => void;
   onStop: () => void;
+  isProMode?: boolean; // New prop to show if we are using the heavy model
 }
 
-export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicClick, onStop }) => {
+export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicClick, onStop, isProMode }) => {
   const isNavigating = mode === AppMode.NAVIGATING;
   const isReading = mode === AppMode.READING;
   const isIdle = mode === AppMode.IDLE;
@@ -26,8 +27,13 @@ export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicC
           }`}>
           <div className="flex items-center gap-2 font-mono font-bold uppercase text-sm tracking-wider">
             {isNavigating ? <Activity className="animate-pulse w-4 h-4" /> : 
-             isReading ? <Eye className="animate-pulse w-4 h-4" /> : <Navigation className="w-4 h-4" />}
-            {isNavigating ? "NAVIGATING (FLASH)" : isReading ? "ANALYZING (GEMINI 3)" : "STANDBY"}
+             isReading ? (isProMode ? <Sparkles className="animate-pulse w-4 h-4" /> : <Eye className="animate-pulse w-4 h-4" />) : 
+             <Navigation className="w-4 h-4" />}
+            
+            {/* Dynamic Label */}
+            {isNavigating ? "NAVIGATING" : 
+             isReading ? (isProMode ? "DEEP ANALYSIS (GEMINI 3)" : "ASSISTANT (FLASH)") : 
+             "STANDBY"}
           </div>
         </div>
       </div>
@@ -54,7 +60,9 @@ export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicC
         
         {/* Thought Bubble */}
         <div className="w-full max-w-md backdrop-blur-xl bg-black/70 border border-slate-700 rounded-2xl p-6 shadow-2xl transition-all">
-          <p className="text-cyan-300 font-mono text-xs mb-2 opacity-70 tracking-widest">GEMINI AI OUTPUT</p>
+          <p className="text-cyan-300 font-mono text-xs mb-2 opacity-70 tracking-widest">
+             {isProMode ? "GEMINI 3 PRO" : "GEMINI FLASH"}
+          </p>
           <p className={`font-medium text-xl leading-relaxed ${
             isNavigating ? 'text-green-300' : isReading ? 'text-purple-300' : 'text-white'
           }`}>
