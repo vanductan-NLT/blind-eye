@@ -1,8 +1,20 @@
-import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { GeoLocation } from "../types";
 
-// Initialize the SDK
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Lazy initialization to prevent crash on module load
+let aiInstance: GoogleGenAI | null = null;
+
+const getAI = () => {
+  if (!aiInstance) {
+    // Ensure process.env.API_KEY exists or handle gracefully
+    const apiKey = process.env.API_KEY || "";
+    if (!apiKey) {
+      console.warn("API_KEY is missing from process.env");
+    }
+    aiInstance = new GoogleGenAI({ apiKey });
+  }
+  return aiInstance;
+};
 
 /**
  * UTILITY: Clean text for Text-to-Speech
@@ -24,6 +36,7 @@ const cleanTextForSpeech = (text: string): string => {
  */
 export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'CHAT' | 'ADVANCED'> => {
   try {
+    const ai = getAI();
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
@@ -67,6 +80,7 @@ Task: Output one word: NAVIGATION, CHAT, or ADVANCED.`
  */
 export const analyzeNavigationFrame = async (base64Image: string): Promise<string> => {
   try {
+    const ai = getAI();
     const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
     const response = await ai.models.generateContent({
@@ -125,6 +139,7 @@ export const analyzeSmartAssistant = async (
   location?: GeoLocation,
   useProModel: boolean = false
 ): Promise<string> => {
+  const ai = getAI();
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
   // Tools (Maps) - Only for location queries

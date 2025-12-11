@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Vision Companion AI</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Polyfill process for browser environments to prevent crashes
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = { env: {} };
+      }
+    </script>
     <style>
       html, body {
         height: 100%;
@@ -33,12 +39,14 @@
   <script type="importmap">
 {
   "imports": {
-    "react/": "https://esm.sh/react@18.3.1/",
     "react": "https://esm.sh/react@18.3.1",
+    "react/": "https://esm.sh/react@18.3.1/",
+    "react-dom": "https://esm.sh/react-dom@18.3.1",
     "react-dom/": "https://esm.sh/react-dom@18.3.1/",
-    "@google/genai": "https://esm.sh/@google/genai@0.2.1",
-    "lucide-react": "https://esm.sh/lucide-react@0.469.0",
-    "react-webcam": "https://esm.sh/react-webcam@7.2.0"
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+    "@google/genai": "https://esm.sh/@google/genai",
+    "lucide-react": "https://esm.sh/lucide-react@0.469.0?deps=react@18.3.1",
+    "react-webcam": "https://esm.sh/react-webcam@7.2.0?deps=react@18.3.1,react-dom@18.3.1"
   }
 }
 </script>
