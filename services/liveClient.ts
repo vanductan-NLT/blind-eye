@@ -2,16 +2,16 @@ import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { base64ToUint8Array, decodeAudioData, float32ToInt16, arrayBufferToBase64 } from "./audioUtils";
 
 const API_KEY = process.env.API_KEY || "";
-const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025"; // Optimized for low latency
+const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025"; 
 
 interface LiveClientCallbacks {
-  onAudioData: (text: string | null) => void; // Optional: if we want to show transcription
+  onAudioData: (text: string | null) => void; 
   onStatusChange: (status: 'connected' | 'disconnected' | 'error') => void;
 }
 
 export class LiveClient {
   private ai: GoogleGenAI;
-  private session: any = null;
+  private sessionPromise: Promise<any> | null = null;
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private nextStartTime: number = 0;
@@ -19,7 +19,6 @@ export class LiveClient {
   private mediaStream: MediaStream | null = null;
   private processor: ScriptProcessorNode | null = null;
   private callbacks: LiveClientCallbacks;
-  private isProcessing: boolean = false;
 
   constructor(callbacks: LiveClientCallbacks) {
     this.ai = new GoogleGenAI({ apiKey: API_KEY });
@@ -28,38 +27,21 @@ export class LiveClient {
 
   public async connect() {
     try {
-      this.callbacks.onStatusChange('connected'); // Optimistic update
+      this.callbacks.onStatusChange('connected');
       
-      // 1. Setup Audio Output (Speaker) - 24kHz is standard for Gemini Flash Live
+      // 1. Setup Audio Output
       this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       this.nextStartTime = this.outputAudioContext.currentTime;
 
       // 2. Connect to Gemini Live
-      this.session = await this.ai.live.connect({
+      // Store the promise immediately so we can latch onto it in callbacks
+      this.sessionPromise = this.ai.live.connect({
         model: MODEL_NAME,
         config: {
           responseModalities: [Modality.AUDIO],
-          systemInstruction: {
-            parts: [{
-              text: `Role: Ultra-Fast Navigation Guide for the Blind.
-Input: Real-time video stream + user voice.
-Output: Audio ONLY.
-
-Directives:
-1. **NAVIGATION MODE**:
-   - If path is clear, say NOTHING or just "Clear".
-   - If hazard detected (within 3 meters), say "STOP" immediately + object name.
-   - Give relative clock directions: "Door at 2 o'clock", "Veer left".
-   - Be rude, be fast. No polite sentences. "Chair ahead", "Stairs down".
-
-2. **INTERACTION**:
-   - If user asks "What is this?", describe it briefly (1 sentence).
-
-CRITICAL: Latency is priority. Keep responses under 5 words unless asked a question.`
-            }]
-          },
+          systemInstruction: "You are a blind guide. NAVIGATION MODE: If path is clear, say nothing. If hazard, say STOP + object. Give clock directions (2 o'clock). Be rude, fast, max 5 words. INTERACTION: Answer questions briefly.",
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } // 'Kore' is usually authoritative/clear
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } 
           }
         },
         callbacks: {
@@ -80,6 +62,10 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
         }
       });
 
+      // We await it here just to catch initial connection errors, 
+      // but the class property sessionPromise is already set for other methods to use.
+      await this.sessionPromise;
+
     } catch (error) {
       console.error("Connection failed", error);
       this.callbacks.onStatusChange('error');
@@ -87,15 +73,14 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
   }
 
   public disconnect() {
-    // 1. Close Session
-    if (this.session) {
-      // session.close() might not exist on the type depending on SDK version, 
-      // but usually closing the socket is handled internally or via end of script.
-      // We'll just nullify it to stop sending data.
-      this.session = null;
+    if (this.sessionPromise) {
+      this.sessionPromise.then(session => {
+        // Try to close if method exists, otherwise just ignore
+        try { session.close(); } catch(e) {}
+      }).catch(() => {}); // Ignore errors if promise failed
+      this.sessionPromise = null;
     }
 
-    // 2. Stop Microphone
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
@@ -109,7 +94,6 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
       this.inputAudioContext = null;
     }
 
-    // 3. Stop Audio Output
     this.audioQueue.forEach(source => {
         try { source.stop(); } catch(e){}
     });
@@ -122,32 +106,28 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
     this.callbacks.onStatusChange('disconnected');
   }
 
-  /**
-   * Captures microphone audio, downsamples to 16kHz PCM, and streams to Gemini.
-   */
   private async startAudioInput() {
     try {
       this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
       const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
-      // Buffer size 4096 = ~250ms latency at 16kHz
       this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
       
       this.processor.onaudioprocess = (e) => {
-        if (!this.session) return;
+        if (!this.sessionPromise) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
-        // Convert Float32 to Int16 PCM
         const pcmInt16 = float32ToInt16(inputData);
-        // Encode to Base64
         const pcmBase64 = arrayBufferToBase64(pcmInt16.buffer);
 
-        this.session.sendRealtimeInput({
-          media: {
-            mimeType: "audio/pcm;rate=16000",
-            data: pcmBase64
-          }
+        this.sessionPromise.then(session => {
+            session.sendRealtimeInput({
+                media: {
+                    mimeType: "audio/pcm;rate=16000",
+                    data: pcmBase64
+                }
+            });
         });
       };
 
@@ -159,27 +139,21 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
     }
   }
 
-  /**
-   * Sends a video frame (JPEG base64) to the model.
-   * Should be called 2-5 times per second by the UI loop.
-   */
   public sendVideoFrame(base64Image: string) {
-    if (!this.session) return;
+    if (!this.sessionPromise) return;
     
-    // Clean base64 header
     const data = base64Image.split(',')[1];
     
-    this.session.sendRealtimeInput({
-      media: {
-        mimeType: "image/jpeg",
-        data: data
-      }
+    this.sessionPromise.then(session => {
+        session.sendRealtimeInput({
+            media: {
+                mimeType: "image/jpeg",
+                data: data
+            }
+        });
     });
   }
 
-  /**
-   * Handles incoming audio chunks from Gemini and queues them for playback.
-   */
   private async handleServerMessage(message: LiveServerMessage) {
     const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     
@@ -187,8 +161,6 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
       const audioBytes = base64ToUint8Array(audioData);
       const audioBuffer = await decodeAudioData(audioBytes, this.outputAudioContext);
 
-      // Schedule playback
-      // Ensure we don't schedule in the past
       this.nextStartTime = Math.max(this.outputAudioContext.currentTime, this.nextStartTime);
       
       const source = this.outputAudioContext.createBufferSource();
@@ -197,8 +169,6 @@ CRITICAL: Latency is priority. Keep responses under 5 words unless asked a quest
       source.start(this.nextStartTime);
       
       this.audioQueue.push(source);
-      
-      // Advance time cursor
       this.nextStartTime += audioBuffer.duration;
     }
   }
