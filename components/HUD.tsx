@@ -56,10 +56,10 @@ export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicC
       </div>
 
       {/* Bottom: Output & Controls */}
-      <div className="flex flex-col gap-6 pointer-events-auto items-center">
+      <div className="flex flex-col gap-6 pointer-events-auto items-center mb-8">
         
         {/* Thought Bubble */}
-        <div className="w-full max-w-md backdrop-blur-xl bg-black/70 border border-slate-700 rounded-2xl p-6 shadow-2xl transition-all">
+        <div className="w-full max-w-md max-h-60 overflow-y-auto backdrop-blur-xl bg-black/70 border border-slate-700 rounded-2xl p-6 shadow-2xl transition-all">
           <p className="text-cyan-300 font-mono text-xs mb-2 opacity-70 tracking-widest">
              {isProMode ? "GEMINI 3 PRO" : "GEMINI FLASH"}
           </p>

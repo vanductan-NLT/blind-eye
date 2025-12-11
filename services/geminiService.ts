@@ -37,6 +37,10 @@ const cleanTextForSpeech = (text: string): string => {
 export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'CHAT' | 'ADVANCED'> => {
   try {
     const ai = getAI();
+    // Quick keyword check to save latency
+    const lower = command.toLowerCase();
+    if (lower.startsWith('hello') || lower.startsWith('hi ')) return 'CHAT';
+    
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
@@ -45,7 +49,7 @@ export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' 
 Context: User is visually impaired.
 Definitions:
 1. NAVIGATION (Flash): Movement, walking, finding exits, finding bathrooms, "Where is the door?", "Am I safe?".
-2. CHAT (Flash): **DEFAULT for 90% of queries.** "What is this?", "Describe the room", "What is in front of me?", Colors, Lights, General Q&A.
+2. CHAT (Flash): **DEFAULT.** "Hello", "Hi", "What is this?", "Describe the room", "What is in front of me?", Colors, Lights.
 3. ADVANCED (Pro): **STRICTLY ONLY FOR:** Reading dense text (OCR), Reading documents, or explicit requests for "Deep/Detailed analysis".
 
 Command: "${command}"
@@ -61,14 +65,12 @@ Task: Output one word: NAVIGATION, CHAT, or ADVANCED.`
 
     const text = response.text?.trim().toUpperCase();
     if (text?.includes('NAV')) return 'NAVIGATION';
-    // Only return ADVANCED if the model is very sure, otherwise default to CHAT (Flash)
     if (text?.includes('ADVANCED')) return 'ADVANCED';
     return 'CHAT'; 
   } catch (error) {
     console.warn("Intent fallback triggered.", error);
     const lower = command.toLowerCase();
     if (lower.includes('nav') || lower.includes('walk') || lower.includes('go')) return 'NAVIGATION';
-    // Only fallback to advanced if explicit "read" or "text" is mentioned
     if (lower.includes('read') && lower.includes('text')) return 'ADVANCED';
     return 'CHAT';
   }
@@ -108,7 +110,7 @@ JSON Schema:
       },
       config: {
         temperature: 0.3,
-        maxOutputTokens: 200,
+        maxOutputTokens: 300, // Increased to prevent JSON truncation
         responseMimeType: 'application/json' 
       }
     });
@@ -120,6 +122,7 @@ JSON Schema:
         const data = JSON.parse(jsonText);
         return cleanTextForSpeech(data.navigation_command || "Path clear.");
     } catch (e) {
+        // If JSON fails (likely cut off), try to salvage text or default
         return "Path clear.";
     }
 
@@ -152,19 +155,20 @@ export const analyzeSmartAssistant = async (
     retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
   } : undefined;
 
-  // STRICT PROMPT FOR BREVITY
-  const promptText = `Role: Vision Assistant.
-User Query: "${userPrompt}"
+  // Context-aware prompt to handle greetings vs queries
+  const promptText = `Role: Friendly Vision Assistant for the blind.
+User Audio: "${userPrompt}"
+Context: You are seeing what is in front of the user (or the user themselves if facing the camera).
+
 Instructions:
-- **EXTREMELY CONCISE**. Max 15-20 words.
-- No intro ("I see...", "The image shows..."). Just the answer.
-- If reading text: Read it naturally.
-- If identifying: "It's a red bottle." (Not "I can see a red bottle located...")
-- NO MARKDOWN.`;
+1. **Greetings ("Hello", "Hi")**: Reply warmly, then briefly describe the scene. (e.g. "Hello! I see a desk in front of you.")
+2. **Identification ("What is this?")**: Directly identify the object.
+3. **General**: Speak naturally and clearly. Keep responses helpful and around 2-3 sentences.
+4. **NO Markdown**.`;
 
   const modelName = useProModel ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
-  // Reduced max tokens for Flash to enforce brevity from the model side
-  const tokenLimit = useProModel ? 4096 : 100; 
+  // Increased tokens to prevent mid-sentence cutoff
+  const tokenLimit = useProModel ? 4096 : 500; 
 
   try {
     console.log(`Analyzing with ${modelName}...`);
@@ -180,7 +184,7 @@ Instructions:
       config: {
         tools: tools.length > 0 ? tools : undefined,
         toolConfig: toolConfig,
-        temperature: 0.4,
+        temperature: 0.7, 
         maxOutputTokens: tokenLimit,
       }
     });
