@@ -22,112 +22,55 @@ const cleanTextForSpeech = (text: string): string => {
     .trim();
 };
 
-export const classifyUserIntent = async (command: string): Promise<'NAVIGATION' | 'CHAT' | 'ADVANCED'> => {
-  try {
-    const ai = getAI();
-    // Local fallback is handled in App.tsx mostly, this is for edge cases
-    
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: {
-        parts: [{ 
-            text: `Role: Intent Classifier.
-Command: "${command}"
-Task: Output one word: NAVIGATION, CHAT, or ADVANCED.
-Rules:
-- Movement/Safety/Walk -> NAVIGATION
-- Read/Text/Sign/Analyze -> ADVANCED
-- Hello/Describe/Object -> CHAT` 
-        }]
-      },
-      config: {
-        temperature: 0.1,
-        maxOutputTokens: 10,
-      }
-    });
-
-    const text = response.text?.trim().toUpperCase();
-    if (text?.includes('NAV')) return 'NAVIGATION';
-    if (text?.includes('ADVANCED')) return 'ADVANCED';
-    return 'CHAT'; 
-  } catch (error) {
-    const lower = command.toLowerCase();
-    if (lower.includes('nav') || lower.includes('walk') || lower.includes('go')) return 'NAVIGATION';
-    if (lower.includes('read') && lower.includes('text')) return 'ADVANCED';
-    return 'CHAT';
-  }
-};
-
 /**
- * Fast Lane: Navigation Mode
- * CRITICAL UPDATE: Prompt now forces SPATIAL DIRECTION and ACTION.
+ * DECISION ENGINE: Uses Flash to route the query.
+ * Returns 'gemini-3-pro-preview' for complex tasks, 'gemini-2.5-flash' for simple ones.
  */
-export const analyzeNavigationFrame = async (base64Image: string): Promise<string> => {
-  try {
-    const ai = getAI();
-    const cleanBase64 = base64Image.split(',')[1] || base64Image;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: {
-        parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-          { text: `Role: Blind Guide.
-Input: User View (User is walking forward).
-Task: Give immediate DIRECTIONAL command.
-
-Rules:
-1. Identify immediate obstacles in the path.
-2. Give relative direction: "To your left", "On your right", "12 o'clock".
-3. Use ACTION verbs: "Veer left", "Stop", "Continue", "Step up".
-4. If path is clear, describe the space briefly: "Hallway clear." or "Open room."
-
-Response format: JSON.
-{
-  "command": "Short spoken command (Max 10 words). e.g., 'Stop. Table 12 o'clock.' or 'Veer right, person ahead.'",
-  "hazard": boolean
-}` 
-          }
-        ]
-      },
-      config: {
-        temperature: 0.1, // Low temp for precision
-        maxOutputTokens: 150,
-        responseMimeType: 'application/json' 
-      }
-    });
-
-    const jsonText = response.text;
-    if (!jsonText) return "Path clear.";
-    
+export const selectBestModelForQuery = async (query: string): Promise<'gemini-3-pro-preview' | 'gemini-2.5-flash'> => {
     try {
-        const data = JSON.parse(jsonText);
-        return cleanTextForSpeech(data.command || "Path clear.");
-    } catch (e) {
-        return "Path clear.";
-    }
+        const ai = getAI();
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: {
+                parts: [{
+                    text: `Task: Router.
+Input: "${query}"
+Output: Either "PRO" or "FLASH".
+Rules:
+- Reading text, handwriting, detailed scene analysis, reasoning -> PRO
+- Simple identification, color, brief question -> FLASH`
+                }]
+            },
+            config: {
+                temperature: 0.0,
+                maxOutputTokens: 5,
+            }
+        });
 
-  } catch (error: any) {
-    if (error.toString().includes("quota")) return "QUOTA_EXCEEDED";
-    return "Navigation active.";
-  }
+        const decision = response.text?.trim().toUpperCase();
+        return decision?.includes("PRO") ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+    } catch (e) {
+        // Fallback to Flash for speed if router fails
+        return 'gemini-2.5-flash';
+    }
 };
 
 /**
  * Smart Assistant Mode (Hybrid)
- * CRITICAL UPDATE: Prompt forces SPATIAL CONTEXT even in chat.
+ * Analyzes image using the specific model passed in.
  */
 export const analyzeSmartAssistant = async (
   base64Image: string, 
   userPrompt: string,
-  location?: GeoLocation,
-  useProModel: boolean = false
+  modelName: 'gemini-3-pro-preview' | 'gemini-2.5-flash',
+  location?: GeoLocation
 ): Promise<string> => {
   const ai = getAI();
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
   const tools: any[] = [];
-  if (location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
+  if (modelName === 'gemini-3-pro-preview' && location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
+    // Only Pro supports tools reliably in this context
     tools.push({ googleMaps: {} });
   }
 
@@ -139,14 +82,11 @@ export const analyzeSmartAssistant = async (
 User Audio: "${userPrompt}"
 Context: You are the user's eyes.
 Instructions:
-1. **Greetings/General**: If user says "Hello", describe **WHERE** objects are relative to them. (e.g., "Hello. You are facing a window. There is a desk to your right.")
+1. **Greetings/General**: If user says "Hello", describe **WHERE** objects are relative to them.
 2. **Identification**: Be specific.
 3. **Guidance**: If the user asks what to do, give direction.
 
 Keep it conversational but SPATIALLY ACCURATE.`;
-
-  const modelName = useProModel ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
-  const tokenLimit = useProModel ? 4096 : 500; 
 
   try {
     const response = await ai.models.generateContent({
@@ -161,17 +101,15 @@ Keep it conversational but SPATIALLY ACCURATE.`;
         tools: tools.length > 0 ? tools : undefined,
         toolConfig: toolConfig,
         temperature: 0.6, 
-        maxOutputTokens: tokenLimit,
+        maxOutputTokens: 500,
       }
     });
     
     if (!response.text) throw new Error("Empty response");
-    
     return cleanTextForSpeech(response.text);
 
   } catch (error: any) {
-    if (error.toString().includes("quota")) return "QUOTA_EXCEEDED";
-    if (useProModel) return "I had trouble analyzing details.";
-    return "I couldn't see that clearly.";
+    if (error.toString().includes("quota")) return "Quota exceeded. Please try again.";
+    return "I couldn't analyze that clearly.";
   }
 };

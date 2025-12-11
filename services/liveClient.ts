@@ -1,7 +1,8 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
-import { base64ToUint8Array, decodeAudioData, float32ToInt16, arrayBufferToBase64 } from "./audioUtils";
+import { GoogleGenAI, LiveServerMessage } from "@google/genai";
+import { base64ToUint8Array, decodeAudioData, float32ToB64PCM } from "./audioUtils";
 
 const API_KEY = process.env.API_KEY || "";
+// Using the Preview model for Live API
 const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025"; 
 
 interface LiveClientCallbacks {
@@ -11,7 +12,7 @@ interface LiveClientCallbacks {
 
 export class LiveClient {
   private ai: GoogleGenAI;
-  private sessionPromise: Promise<any> | null = null;
+  private session: any = null; // Hold the active session
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private nextStartTime: number = 0;
@@ -19,6 +20,7 @@ export class LiveClient {
   private mediaStream: MediaStream | null = null;
   private processor: ScriptProcessorNode | null = null;
   private callbacks: LiveClientCallbacks;
+  private isConnected: boolean = false;
 
   constructor(callbacks: LiveClientCallbacks) {
     this.ai = new GoogleGenAI({ apiKey: API_KEY });
@@ -29,42 +31,46 @@ export class LiveClient {
     try {
       this.callbacks.onStatusChange('connected');
       
-      // 1. Setup Audio Output
-      this.outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      // 1. Setup Audio Output (Speaker)
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
+      
+      if (this.outputAudioContext.state === 'suspended') {
+        await this.outputAudioContext.resume();
+      }
       this.nextStartTime = this.outputAudioContext.currentTime;
 
-      // 2. Connect to Gemini Live
-      // Store the promise immediately so we can latch onto it in callbacks
-      this.sessionPromise = this.ai.live.connect({
+      // 2. Connect to Gemini Live Session
+      // We assign the session result to this.session
+      this.session = await this.ai.live.connect({
         model: MODEL_NAME,
         config: {
-          responseModalities: [Modality.AUDIO],
-          systemInstruction: "You are a blind guide. NAVIGATION MODE: If path is clear, say nothing. If hazard, say STOP + object. Give clock directions (2 o'clock). Be rude, fast, max 5 words. INTERACTION: Answer questions briefly.",
+          // Use string 'AUDIO' to avoid Enum transpilation issues in some ESM environments
+          responseModalities: ['AUDIO'], 
+          systemInstruction: "You are a guide for the blind. Speak fast. Warn of hazards. Use clock directions (12 o'clock). Say 'Ready' now.",
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } 
           }
         },
         callbacks: {
           onopen: () => {
-            console.log("Gemini Live Session Opened");
+            console.log(">> Gemini Live Connected");
+            this.isConnected = true;
             this.startAudioInput();
           },
           onmessage: (msg: LiveServerMessage) => this.handleServerMessage(msg),
           onclose: () => {
-            console.log("Gemini Live Session Closed");
+            console.log(">> Gemini Live Closed");
+            this.isConnected = false;
             this.disconnect();
           },
           onerror: (err) => {
-            console.error("Gemini Live Error", err);
+            console.error(">> Gemini Live Error:", JSON.stringify(err, null, 2));
             this.callbacks.onStatusChange('error');
             this.disconnect();
           }
         }
       });
-
-      // We await it here just to catch initial connection errors, 
-      // but the class property sessionPromise is already set for other methods to use.
-      await this.sessionPromise;
 
     } catch (error) {
       console.error("Connection failed", error);
@@ -73,103 +79,156 @@ export class LiveClient {
   }
 
   public disconnect() {
-    if (this.sessionPromise) {
-      this.sessionPromise.then(session => {
-        // Try to close if method exists, otherwise just ignore
-        try { session.close(); } catch(e) {}
-      }).catch(() => {}); // Ignore errors if promise failed
-      this.sessionPromise = null;
+    this.isConnected = false;
+
+    // Close Session safely
+    if (this.session) {
+      try { 
+        this.session.close(); 
+      } catch(e) { 
+        // ignore if already closed 
+      }
+      this.session = null;
     }
 
+    // Stop Microphone & Input Processing
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach(track => track.stop());
       this.mediaStream = null;
     }
     if (this.processor) {
       this.processor.disconnect();
+      this.processor.onaudioprocess = null;
       this.processor = null;
     }
     if (this.inputAudioContext) {
-      this.inputAudioContext.close();
+      if (this.inputAudioContext.state !== 'closed') {
+        this.inputAudioContext.close().catch(() => {});
+      }
       this.inputAudioContext = null;
     }
 
-    this.audioQueue.forEach(source => {
-        try { source.stop(); } catch(e){}
-    });
-    this.audioQueue = [];
+    // Stop Speaker Output
+    this.stopAudioQueue();
     if (this.outputAudioContext) {
-      this.outputAudioContext.close();
+      if (this.outputAudioContext.state !== 'closed') {
+        this.outputAudioContext.close().catch(() => {});
+      }
       this.outputAudioContext = null;
     }
 
     this.callbacks.onStatusChange('disconnected');
   }
 
+  private stopAudioQueue() {
+    this.audioQueue.forEach(source => {
+        try { source.stop(); } catch(e){}
+    });
+    this.audioQueue = [];
+  }
+
   private async startAudioInput() {
+    if (!this.isConnected) return;
+
     try {
-      this.inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
       
-      const source = this.inputAudioContext.createMediaStreamSource(this.mediaStream);
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          channelCount: 1, 
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true
+        } 
+      });
+      this.mediaStream = stream;
+
+      const source = this.inputAudioContext.createMediaStreamSource(stream);
       this.processor = this.inputAudioContext.createScriptProcessor(4096, 1, 1);
       
       this.processor.onaudioprocess = (e) => {
-        if (!this.sessionPromise) return;
+        if (!this.session || !this.isConnected) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
-        const pcmInt16 = float32ToInt16(inputData);
-        const pcmBase64 = arrayBufferToBase64(pcmInt16.buffer);
+        const b64Data = float32ToB64PCM(inputData);
 
-        this.sessionPromise.then(session => {
-            session.sendRealtimeInput({
-                media: {
-                    mimeType: "audio/pcm;rate=16000",
-                    data: pcmBase64
-                }
-            });
-        });
+        try {
+          this.session.sendRealtimeInput({
+            media: {
+              mimeType: "audio/pcm;rate=16000",
+              data: b64Data
+            }
+          });
+        } catch (err) {
+            console.warn("Failed to send audio", err);
+        }
       };
 
       source.connect(this.processor);
-      this.processor.connect(this.inputAudioContext.destination);
+      
+      // Keep processor alive
+      const mute = this.inputAudioContext.createGain();
+      mute.gain.value = 0;
+      this.processor.connect(mute);
+      mute.connect(this.inputAudioContext.destination);
 
     } catch (err) {
-      console.error("Mic Error", err);
+      console.error("Mic Access Error", err);
     }
   }
 
   public sendVideoFrame(base64Image: string) {
-    if (!this.sessionPromise) return;
+    if (!this.session || !this.isConnected) return;
     
-    const data = base64Image.split(',')[1];
+    const data = base64Image.split(',')[1] || base64Image;
     
-    this.sessionPromise.then(session => {
-        session.sendRealtimeInput({
-            media: {
-                mimeType: "image/jpeg",
-                data: data
-            }
-        });
-    });
+    try {
+      this.session.sendRealtimeInput({
+        media: {
+          mimeType: "image/jpeg",
+          data: data
+        }
+      });
+    } catch (err) {
+       console.warn("Failed to send video frame", err);
+    }
   }
 
   private async handleServerMessage(message: LiveServerMessage) {
-    const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-    
-    if (audioData && this.outputAudioContext) {
-      const audioBytes = base64ToUint8Array(audioData);
-      const audioBuffer = await decodeAudioData(audioBytes, this.outputAudioContext);
+    const serverContent = message.serverContent;
 
-      this.nextStartTime = Math.max(this.outputAudioContext.currentTime, this.nextStartTime);
-      
-      const source = this.outputAudioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(this.outputAudioContext.destination);
-      source.start(this.nextStartTime);
-      
-      this.audioQueue.push(source);
-      this.nextStartTime += audioBuffer.duration;
+    // 1. Interruption
+    if (serverContent?.interrupted) {
+        console.log(">> Interrupted");
+        this.stopAudioQueue();
+        if (this.outputAudioContext) {
+            this.nextStartTime = this.outputAudioContext.currentTime;
+        }
+        return;
+    }
+
+    // 2. Audio Processing
+    const audioData = serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+    if (audioData && this.outputAudioContext) {
+      try {
+        const audioBytes = base64ToUint8Array(audioData);
+        const audioBuffer = await decodeAudioData(audioBytes, this.outputAudioContext);
+
+        if (this.nextStartTime < this.outputAudioContext.currentTime) {
+            this.nextStartTime = this.outputAudioContext.currentTime;
+        }
+        
+        const source = this.outputAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.outputAudioContext.destination);
+        source.start(this.nextStartTime);
+        
+        this.audioQueue.push(source);
+        this.nextStartTime += audioBuffer.duration;
+      } catch (e) {
+        console.error("Audio Decode Error", e);
+      }
     }
   }
 }
