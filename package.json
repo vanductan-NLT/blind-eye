@@ -9,11 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "@google/genai": "^1.33.0",
-    "lucide-react": "^0.560.0",
-    "react-webcam": "^7.2.0"
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "@google/genai": "0.2.1",
+    "lucide-react": "0.469.0",
+    "react-webcam": "7.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

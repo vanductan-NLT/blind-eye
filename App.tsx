@@ -21,11 +21,16 @@ const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
   const [lastMessage, setLastMessage] = useState<string>("");
   const [location, setLocation] = useState<GeoLocation | undefined>(undefined);
-  // Track if we are using Pro model for UI feedback
   const [isProMode, setIsProMode] = useState(false);
   
-  // Fix: Use ReturnType<typeof setTimeout> instead of NodeJS.Timeout for browser compatibility
+  // Ref to track mode synchronously for async callbacks (prevents speaking after stop)
+  const modeRef = useRef<AppMode>(AppMode.IDLE);
   const navLoopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync ref with state
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // --- Geolocation ---
   useEffect(() => {
@@ -53,10 +58,12 @@ const App: React.FC = () => {
     const intent = await classifyUserIntent(transcript);
     console.log("Intent detected:", intent);
 
+    // If user stopped while processing intent, abort
+    if (modeRef.current === AppMode.IDLE && mode !== AppMode.IDLE) return;
+
     if (intent === 'NAVIGATION') {
       handleStartNav();
     } else {
-      // Intent is either 'CHAT' (Flash) or 'ADVANCED' (Pro)
       const usePro = intent === 'ADVANCED';
       handleSmartQuery(transcript, usePro);
     }
@@ -81,7 +88,7 @@ const App: React.FC = () => {
     }
     setMode(AppMode.IDLE);
     setIsProMode(false);
-    stopSpeaking();
+    stopSpeaking(); // Immediately silence TTS
     setLastMessage("Paused.");
   };
 
@@ -89,17 +96,26 @@ const App: React.FC = () => {
     setMode(AppMode.READING);
     setIsProMode(usePro);
     setLastMessage(usePro ? "Deep analyzing..." : "Thinking...");
-    speak(usePro ? "Analyzing details." : "Checking."); 
+    
+    // Only speak "Checking" if not in Pro mode to save time, or keep it very short
+    if (usePro) speak("Analyzing."); 
 
-    // Small delay to ensure webcam frame is fresh after button press
+    // Small delay to ensure webcam frame is fresh
     setTimeout(async () => {
-      if (!webcamRef.current) return;
+      // 1. Safety Check: If user stopped during the delay, abort
+      if (modeRef.current === AppMode.IDLE || !webcamRef.current) return;
+
       const imageSrc = webcamRef.current.getScreenshot();
       
       if (imageSrc) {
-        // Pass the usePro flag to service
         const response = await analyzeSmartAssistant(imageSrc, query, location, usePro);
         
+        // 2. Safety Check: If user stopped during the API call, abort
+        if (modeRef.current === AppMode.IDLE) {
+            console.log("Response discarded (User stopped app)");
+            return; 
+        }
+
         if (response === "QUOTA_EXCEEDED") {
            setLastMessage("Quota exceeded.");
            speak("Quota exceeded.");
@@ -109,19 +125,22 @@ const App: React.FC = () => {
 
         setLastMessage(response);
         speak(response);
-        setMode(AppMode.IDLE); // Return to idle after answering
+        setMode(AppMode.IDLE); 
       }
     }, 200);
   };
 
   // --- Navigation Loop ---
   const runNavLoop = useCallback(async () => {
-    if (mode !== AppMode.NAVIGATING || !webcamRef.current) return;
+    if (modeRef.current !== AppMode.NAVIGATING || !webcamRef.current) return;
 
     const imageSrc = webcamRef.current.getScreenshot();
     if (imageSrc) {
       const safetyInfo = await analyzeNavigationFrame(imageSrc);
       
+      // Check if still navigating before speaking
+      if (modeRef.current !== AppMode.NAVIGATING) return;
+
       if (safetyInfo === "QUOTA_EXCEEDED") {
         handleStop();
         speak("Quota limit reached.");
@@ -132,10 +151,10 @@ const App: React.FC = () => {
       speak(safetyInfo);
     }
 
-    if (mode === AppMode.NAVIGATING) {
+    if (modeRef.current === AppMode.NAVIGATING) {
       navLoopTimer.current = setTimeout(runNavLoop, NAV_INTERVAL_MS);
     }
-  }, [mode]);
+  }, []); // Remove dependencies to avoid stale closures, rely on refs
 
   useEffect(() => {
     if (mode === AppMode.NAVIGATING) {
@@ -150,13 +169,13 @@ const App: React.FC = () => {
     if (isListening) {
       stopListening();
     } else {
-      stopSpeaking(); // Quiet down when user wants to talk
+      stopSpeaking();
       startListening();
     }
   };
 
   return (
-    <div className="relative w-screen h-screen bg-black overflow-hidden select-none">
+    <div className="relative w-full h-[100dvh] bg-black overflow-hidden select-none touch-none">
       <Webcam
         ref={webcamRef}
         audio={false}
