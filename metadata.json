@@ -1,0 +1,9 @@
+{
+  "name": "Vision Companion AI",
+  "description": "A hybrid AI visual assistant for the visually impaired using Gemini Flash for navigation and Gemini Pro for reading.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
