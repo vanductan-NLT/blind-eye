@@ -1,18 +1,18 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { HUD } from './components/HUD';
-import { AppMode, GeoLocation } from './types';
-import { analyzeNavigationFrame, analyzeSmartAssistant, classifyUserIntent } from './services/geminiService';
-import { speak, stopSpeaking } from './services/speechService';
-import { useSpeechRecognition } from './hooks/useSpeechRecognition';
+import { AppMode } from './types';
+import { LiveClient } from './services/liveClient';
+import { stopSpeaking as stopBrowserTTS } from './services/speechService';
 
-// Navigation loop interval (ms) - REDUCED for Real-time feel
-// 2500ms is a good balance between "Real-time" and Rate Limiting
-const NAV_INTERVAL_MS = 2500;
+// Video Frame Rate for AI (Frames per second)
+// 2 FPS is usually sufficient for navigation without killing bandwidth, 
+// but for "Realtime" feel we can go up to 5 FPS if connection allows.
+const VIDEO_FPS = 3; 
 
 // Webcam configuration
 const videoConstraints = {
-  width: { ideal: 640 }, // Lower resolution for faster upload/processing
+  width: { ideal: 640 }, 
   height: { ideal: 480 },
   facingMode: "environment"
 };
@@ -20,195 +20,85 @@ const videoConstraints = {
 const App: React.FC = () => {
   const [mounted, setMounted] = useState(false);
   const webcamRef = useRef<Webcam>(null);
+  
+  // State
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
-  const [lastMessage, setLastMessage] = useState<string>("");
-  const [location, setLocation] = useState<GeoLocation | undefined>(undefined);
-  const [isProMode, setIsProMode] = useState(false);
+  const [statusText, setStatusText] = useState<string>("Ready");
   const [cameraError, setCameraError] = useState<boolean>(false);
   
-  const modeRef = useRef<AppMode>(AppMode.IDLE);
-  const navLoopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Refs for Live Client
+  const liveClientRef = useRef<LiveClient | null>(null);
+  const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    modeRef.current = mode;
-  }, [mode]);
-
-  useEffect(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => setLocation({
-            latitude: position.coords.latitude,
-            longitude: position.coords.longitude
-        }),
-        null,
-        { enableHighAccuracy: true }
-      );
-    }
+    return () => stopSession(); // Cleanup on unmount
   }, []);
 
   const handleCameraError = useCallback((error: string | DOMException) => {
     console.error("Camera access error:", error);
     setCameraError(true);
-    setLastMessage("Camera Error: Check Permissions");
-    speak("I cannot access the camera. Please check your browser permissions.");
+    setStatusText("Camera Error");
   }, []);
 
-  // --- Core Handlers (Defined before usage) ---
+  // --- Session Management ---
 
-  const handleStop = useCallback(() => {
-    if (navLoopTimer.current) {
-      clearTimeout(navLoopTimer.current);
-      navLoopTimer.current = null;
-    }
-    setMode(AppMode.IDLE);
-    setIsProMode(false);
-    stopSpeaking();
-    setLastMessage("Paused.");
-  }, []);
+  const startSession = useCallback(async () => {
+    if (cameraError) return;
+    
+    // Stop any browser TTS from previous modes
+    stopBrowserTTS();
 
-  const handleStartNav = useCallback(() => {
-    if (cameraError) {
-        speak("Camera is unavailable.");
-        return;
-    }
     setMode(AppMode.NAVIGATING);
-    setIsProMode(false);
-    setLastMessage("Navigation Active");
-    speak("Navigation started.");
+    setStatusText("Connecting to Gemini Live...");
+
+    liveClientRef.current = new LiveClient({
+      onAudioData: () => {}, // Not used in this UI yet
+      onStatusChange: (status) => {
+        if (status === 'disconnected' || status === 'error') {
+           setMode(AppMode.IDLE);
+           setStatusText(status === 'error' ? "Connection Error" : "Ready");
+           stopSession();
+        } else if (status === 'connected') {
+           setStatusText("Live Navigation Active");
+        }
+      }
+    });
+
+    await liveClientRef.current.connect();
+
+    // Start Video Stream Loop
+    frameIntervalRef.current = setInterval(() => {
+      if (webcamRef.current && liveClientRef.current) {
+        const imageSrc = webcamRef.current.getScreenshot();
+        if (imageSrc) {
+          liveClientRef.current.sendVideoFrame(imageSrc);
+        }
+      }
+    }, 1000 / VIDEO_FPS);
+
   }, [cameraError]);
 
-  const handleSmartQuery = useCallback(async (query: string, usePro: boolean) => {
-    if (cameraError) {
-        speak("Camera is unavailable.");
-        return;
+  const stopSession = useCallback(() => {
+    if (frameIntervalRef.current) {
+      clearInterval(frameIntervalRef.current);
+      frameIntervalRef.current = null;
     }
-    setMode(AppMode.READING);
-    setIsProMode(usePro);
-    setLastMessage(usePro ? "Deep analyzing..." : "Looking...");
     
-    // Immediate feedback
-    if (usePro) speak("Analyzing.");
-
-    // Small delay to allow UI to update
-    setTimeout(async () => {
-      if (modeRef.current === AppMode.IDLE || !webcamRef.current) return;
-
-      const imageSrc = webcamRef.current.getScreenshot();
-      
-      if (imageSrc) {
-        const response = await analyzeSmartAssistant(imageSrc, query, location, usePro);
-        
-        if (modeRef.current === AppMode.IDLE) return;
-
-        if (response === "QUOTA_EXCEEDED") {
-           setLastMessage("Quota exceeded.");
-           speak("Quota exceeded.");
-           setMode(AppMode.IDLE);
-           return;
-        }
-
-        setLastMessage(response);
-        speak(response);
-        setMode(AppMode.IDLE); 
-      } else {
-        setLastMessage("Camera failed.");
-        setMode(AppMode.IDLE);
-      }
-    }, 100);
-  }, [cameraError, location]);
-
-  const handleTranscribedCommand = useCallback(async (transcript: string) => {
-    if (!transcript) return;
+    if (liveClientRef.current) {
+      liveClientRef.current.disconnect();
+      liveClientRef.current = null;
+    }
     
-    const lower = transcript.toLowerCase();
+    setMode(AppMode.IDLE);
+    setStatusText("Ready");
+  }, []);
 
-    // --- 1. LOCAL INTENT CHECK (Instant Latency Fix) ---
-    // Bypass AI for common keywords to make it feel instant
-    if (lower.includes("stop") || lower.includes("pause") || lower.includes("quit")) {
-        handleStop();
-        return;
-    }
-
-    // Stop current speech to listen/process new command
-    handleStop(); 
-    setLastMessage("Processing...");
-
-    // Fast-path for Navigation
-    if (lower.includes("nav") || lower.includes("walk") || lower.includes("go") || lower.includes("start")) {
-        handleStartNav();
-        return;
-    }
-
-    // Fast-path for Basic Chat (Hello/Describe)
-    if (lower.includes("hello") || lower.includes("hi") || lower.includes("what") || lower.includes("describe")) {
-        handleSmartQuery(transcript, false); // False = Use Flash (Fast)
-        return;
-    }
-
-    // --- 2. AI INTENT CHECK (Fallback for complex queries) ---
-    const intent = await classifyUserIntent(transcript);
-    console.log("Intent detected:", intent);
-
-    if (modeRef.current === AppMode.IDLE && mode !== AppMode.IDLE) return;
-
-    if (intent === 'NAVIGATION') {
-      handleStartNav();
+  const toggleSession = () => {
+    if (mode === AppMode.IDLE) {
+      startSession();
     } else {
-      const usePro = intent === 'ADVANCED';
-      handleSmartQuery(transcript, usePro);
-    }
-
-  }, [handleStop, handleStartNav, handleSmartQuery, mode]);
-
-  // Initialize Speech Hook
-  const { isListening, startListening, stopListening } = useSpeechRecognition(handleTranscribedCommand);
-
-  // --- Navigation Loop ---
-
-  const runNavLoop = useCallback(async () => {
-    if (modeRef.current !== AppMode.NAVIGATING || !webcamRef.current) return;
-
-    const imageSrc = webcamRef.current.getScreenshot();
-    if (imageSrc) {
-      const safetyInfo = await analyzeNavigationFrame(imageSrc);
-      
-      if (modeRef.current !== AppMode.NAVIGATING) return;
-
-      if (safetyInfo === "QUOTA_EXCEEDED") {
-        handleStop();
-        speak("Quota limit reached.");
-        return;
-      }
-
-      setLastMessage(safetyInfo);
-      speak(safetyInfo);
-    }
-
-    // Re-schedule
-    if (modeRef.current === AppMode.NAVIGATING) {
-      navLoopTimer.current = setTimeout(runNavLoop, NAV_INTERVAL_MS);
-    }
-  }, [handleStop]); 
-
-  useEffect(() => {
-    if (mode === AppMode.NAVIGATING) {
-      runNavLoop();
-    }
-    return () => {
-      if (navLoopTimer.current) clearTimeout(navLoopTimer.current);
-    };
-  }, [mode, runNavLoop]);
-
-  const handleMicClick = () => {
-    if (isListening) {
-      stopListening();
-    } else {
-      stopSpeaking();
-      startListening();
+      stopSession();
     }
   };
 
@@ -233,18 +123,19 @@ const App: React.FC = () => {
           <div className="absolute inset-0 flex items-center justify-center z-0 bg-gray-900">
               <div className="text-center p-6">
                   <p className="text-red-500 font-bold text-xl mb-2">Camera Disabled</p>
-                  <p className="text-gray-400">Please allow camera access in your browser settings to use Vision Companion.</p>
+                  <p className="text-gray-400">Please allow camera access.</p>
               </div>
           </div>
       )}
 
+      {/* Reusing HUD but simplifying interaction since it's now all Voice-driven via Live API */}
       <HUD 
         mode={mode} 
-        lastMessage={lastMessage} 
-        isListening={isListening}
-        onMicClick={handleMicClick}
-        onStop={handleStop}
-        isProMode={isProMode}
+        lastMessage={statusText} 
+        isListening={mode === AppMode.NAVIGATING} // Visual feedback
+        onMicClick={toggleSession}
+        onStop={stopSession}
+        isProMode={false} // Live API uses Flash specialized model
       />
     </div>
   );
