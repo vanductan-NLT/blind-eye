@@ -1,3 +1,4 @@
+
 export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
   if (!window.speechSynthesis) return;
 
@@ -6,17 +7,36 @@ export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
     window.speechSynthesis.cancel();
   }
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  
-  // Select a good voice if available (preference for Google US English)
-  const voices = window.speechSynthesis.getVoices();
-  const preferredVoice = voices.find(v => v.name.includes('Google US English')) || voices[0];
-  if (preferredVoice) utterance.voice = preferredVoice;
+  const performSpeak = () => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Attempt to find preferred voices
+    const voices = window.speechSynthesis.getVoices();
+    // Prioritize high quality Google voices, then standard English
+    const preferredVoice = voices.find(v => v.name.includes('Google US English')) || 
+                           voices.find(v => v.lang.startsWith('en-US')) ||
+                           voices[0];
+                           
+    if (preferredVoice) utterance.voice = preferredVoice;
 
-  utterance.rate = 1.25; // Faster rate for efficiency
-  utterance.pitch = 1.0;
+    utterance.rate = 1.25; 
+    utterance.pitch = 1.0;
+    
+    // Add event handlers for debugging
+    utterance.onerror = (e) => console.error("TTS Error:", e);
 
-  window.speechSynthesis.speak(utterance);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Chrome sometimes needs a moment to load voices
+  if (window.speechSynthesis.getVoices().length === 0) {
+    window.speechSynthesis.onvoiceschanged = () => {
+        performSpeak();
+        window.speechSynthesis.onvoiceschanged = null;
+    };
+  } else {
+    performSpeak();
+  }
 };
 
 export const stopSpeaking = () => {

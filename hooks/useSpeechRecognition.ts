@@ -4,23 +4,44 @@ export const useSpeechRecognition = (onCommand: (command: string) => void) => {
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
   const isMounted = useRef(false);
+  const retryTimeoutRef = useRef<any>(null);
 
   useEffect(() => {
     isMounted.current = true;
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
-    if (SpeechRecognition) {
+    return () => {
+      isMounted.current = false;
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch(e){}
+      }
+      if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    };
+  }, []);
+
+  const startListening = useCallback(() => {
+    // Basic browser support check
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      console.warn("Speech Recognition not supported in this browser");
+      return;
+    }
+
+    if (isListening) return;
+
+    try {
       const recognition = new SpeechRecognition();
-      recognition.continuous = false; // Single command mode
+      recognition.continuous = false;
       recognition.interimResults = false;
       recognition.lang = 'en-US';
 
       recognition.onstart = () => {
         if (isMounted.current) setIsListening(true);
+        console.log("Speech Recognition Started");
       };
 
       recognition.onend = () => {
         if (isMounted.current) setIsListening(false);
+        console.log("Speech Recognition Ended");
       };
       
       recognition.onresult = (event: any) => {
@@ -35,33 +56,35 @@ export const useSpeechRecognition = (onCommand: (command: string) => void) => {
       recognition.onerror = (event: any) => {
         console.warn("Speech recognition error", event.error);
         if (isMounted.current) setIsListening(false);
+
+        // RETRY LOGIC for 'aborted' or 'not-allowed' temporary glitches
+        if (event.error === 'aborted' || event.error === 'network') {
+            console.log("Retrying speech recognition...");
+            if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+            retryTimeoutRef.current = setTimeout(() => {
+                if (isMounted.current && !recognitionRef.current) {
+                    startListening();
+                }
+            }, 500);
+        }
       };
 
       recognitionRef.current = recognition;
-    }
+      recognition.start();
 
-    return () => {
-      isMounted.current = false;
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-    };
-  }, [onCommand]);
-
-  const startListening = useCallback(() => {
-    if (recognitionRef.current && !isListening) {
-      try {
-        recognitionRef.current.start();
-      } catch (e) {
-        console.warn("Speech start failed", e);
-      }
+    } catch (e) {
+      console.error("Failed to start recognition", e);
     }
-  }, [isListening]);
+  }, [isListening, onCommand]);
 
   const stopListening = useCallback(() => {
+    if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+    
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try { recognitionRef.current.stop(); } catch(e){}
+      recognitionRef.current = null;
     }
+    setIsListening(false);
   }, []);
 
   return { isListening, startListening, stopListening };

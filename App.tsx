@@ -7,7 +7,7 @@ import { stopSpeaking as stopBrowserTTS, speak } from './services/speechService'
 import { useSpeechRecognition } from './hooks/useSpeechRecognition';
 import { analyzeSmartAssistant, selectBestModelForQuery } from './services/geminiService';
 
-const VIDEO_FPS = 2; // Reduced to 2FPS to reduce bandwidth load/errors
+const VIDEO_FPS = 2; 
 
 const videoConstraints = {
   width: { ideal: 640 }, 
@@ -19,18 +19,19 @@ const App: React.FC = () => {
   const [mounted, setMounted] = useState(false);
   const webcamRef = useRef<Webcam>(null);
   
-  // State
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
   const [statusText, setStatusText] = useState<string>("Ready");
   const [cameraError, setCameraError] = useState<boolean>(false);
   const [isProMode, setIsProMode] = useState(false);
   
-  // Refs
   const liveClientRef = useRef<LiveClient | null>(null);
   const frameIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setMounted(true);
+    // Initial welcome message (optional, helps wake up TTS)
+    // setTimeout(() => speak("Vision System Ready"), 1000); 
+    
     return () => {
         if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
         if (liveClientRef.current) liveClientRef.current.disconnect();
@@ -46,18 +47,17 @@ const App: React.FC = () => {
   // --- Session Management (Live Navigation) ---
 
   const stopSession = useCallback(() => {
-    // 1. Clear Interval FIRST to stop sending data
     if (frameIntervalRef.current) {
       clearInterval(frameIntervalRef.current);
       frameIntervalRef.current = null;
     }
     
-    // 2. Disconnect Client
     if (liveClientRef.current) {
       liveClientRef.current.disconnect();
       liveClientRef.current = null;
     }
     
+    // Reset mode only if we were navigating
     if (mode === AppMode.NAVIGATING) {
         setMode(AppMode.IDLE);
         setStatusText("Ready");
@@ -72,16 +72,15 @@ const App: React.FC = () => {
     stopListening(); 
 
     setMode(AppMode.NAVIGATING);
-    setStatusText("Connecting...");
+    setStatusText("Connecting Live...");
 
     liveClientRef.current = new LiveClient({
       onAudioData: () => {}, 
       onStatusChange: (status) => {
         if (status === 'disconnected') {
-           // handled
+           // handled by stopSession logic
         } else if (status === 'error') {
            setStatusText("Connection Error");
-           // Do not auto-call stopSession here to avoid recursion, just clear refs
            if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
         } else if (status === 'connected') {
            setStatusText("Live Active");
@@ -91,7 +90,6 @@ const App: React.FC = () => {
 
     await liveClientRef.current.connect();
 
-    // Start sending video frames
     frameIntervalRef.current = setInterval(() => {
       if (webcamRef.current && liveClientRef.current) {
         const imageSrc = webcamRef.current.getScreenshot();
@@ -123,23 +121,27 @@ const App: React.FC = () => {
         const imageSrc = webcamRef.current.getScreenshot();
         if (!imageSrc) throw new Error("Could not capture image");
 
+        // 1. Router (Flash)
         const selectedModel = await selectBestModelForQuery(command);
         setIsProMode(selectedModel.includes("pro"));
-        setStatusText(selectedModel.includes("pro") ? "Pro Model..." : "Flash Model...");
+        setStatusText(selectedModel.includes("pro") ? "Pro Reasoning..." : "Flash Speed...");
 
+        // 2. Analysis (Flash/Pro)
         const result = await analyzeSmartAssistant(imageSrc, command, selectedModel, { latitude: 0, longitude: 0 });
 
+        // 3. Response
         setStatusText(result);
         speak(result);
 
         setTimeout(() => {
             setMode(AppMode.IDLE);
             setStatusText("Ready");
-        }, 3000 + (result.length * 70)); 
+        }, 4000 + (result.length * 50)); 
 
     } catch (error) {
         console.error("Assistant Error", error);
-        setStatusText("Analysis Failed");
+        setStatusText("Failed. Try again.");
+        speak("I couldn't understand that.");
         setMode(AppMode.IDLE);
     }
   };
@@ -151,10 +153,13 @@ const App: React.FC = () => {
     stopBrowserTTS();
     
     setStatusText("Wait...");
+    
+    // Increased delay to 1000ms to allow LiveClient mic stream to fully release
+    // This prevents 'aborted' errors in SpeechRecognition
     setTimeout(() => {
         startListening();
         setStatusText("Listening...");
-    }, 500); // Increased delay to 500ms to ensure mic is free
+    }, 1000); 
   };
 
   if (!mounted) return null;

@@ -2,7 +2,6 @@ import { GoogleGenAI, LiveServerMessage } from "@google/genai";
 import { base64ToUint8Array, decodeAudioData, float32ToB64PCM } from "./audioUtils";
 
 const API_KEY = process.env.API_KEY || "";
-// Using the Preview model for Live API
 const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025"; 
 
 interface LiveClientCallbacks {
@@ -12,7 +11,7 @@ interface LiveClientCallbacks {
 
 export class LiveClient {
   private ai: GoogleGenAI;
-  private session: any = null; // Hold the active session
+  private session: any = null; 
   private inputAudioContext: AudioContext | null = null;
   private outputAudioContext: AudioContext | null = null;
   private nextStartTime: number = 0;
@@ -29,27 +28,26 @@ export class LiveClient {
 
   public async connect() {
     try {
-      this.callbacks.onStatusChange('connected');
-      
-      // 1. Setup Audio Output (Speaker)
+      this.callbacks.onStatusChange('connected'); // Optimistic update
+
+      // 1. Initialize Output Audio (Speaker) immediately
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       this.outputAudioContext = new AudioContextClass({ sampleRate: 24000 });
       
+      // Resume immediately (browser policy)
       if (this.outputAudioContext.state === 'suspended') {
         await this.outputAudioContext.resume();
       }
       this.nextStartTime = this.outputAudioContext.currentTime;
 
-      // 2. Connect to Gemini Live Session
-      // We assign the session result to this.session
+      // 2. Connect to Gemini Live
       this.session = await this.ai.live.connect({
         model: MODEL_NAME,
         config: {
-          // Use string 'AUDIO' to avoid Enum transpilation issues in some ESM environments
           responseModalities: ['AUDIO'], 
-          systemInstruction: "You are a guide for the blind. Speak fast. Warn of hazards. Use clock directions (12 o'clock). Say 'Ready' now.",
+          systemInstruction: "You are a navigation assistant for the visually impaired. speak fast. be concise. If you see obstacles, warn immediately. If safe, say 'Path Clear'.",
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } 
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } } 
           }
         },
         callbacks: {
@@ -65,7 +63,7 @@ export class LiveClient {
             this.disconnect();
           },
           onerror: (err) => {
-            console.error(">> Gemini Live Error:", JSON.stringify(err, null, 2));
+            console.error(">> Gemini Live Error:", err);
             this.callbacks.onStatusChange('error');
             this.disconnect();
           }
@@ -75,45 +73,43 @@ export class LiveClient {
     } catch (error) {
       console.error("Connection failed", error);
       this.callbacks.onStatusChange('error');
+      this.disconnect();
     }
   }
 
   public disconnect() {
     this.isConnected = false;
 
-    // Close Session safely
+    // 1. Close Session
     if (this.session) {
-      try { 
-        this.session.close(); 
-      } catch(e) { 
-        // ignore if already closed 
-      }
+      try { this.session.close(); } catch(e) {}
       this.session = null;
     }
 
-    // Stop Microphone & Input Processing
+    // 2. Stop Mic Stream (CRITICAL for switching modes)
     if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach(track => track.stop());
+      this.mediaStream.getTracks().forEach(track => {
+        track.stop();
+        track.enabled = false;
+      });
       this.mediaStream = null;
     }
+
+    // 3. Clean up Input Context
     if (this.processor) {
       this.processor.disconnect();
       this.processor.onaudioprocess = null;
       this.processor = null;
     }
     if (this.inputAudioContext) {
-      if (this.inputAudioContext.state !== 'closed') {
-        this.inputAudioContext.close().catch(() => {});
-      }
+      this.inputAudioContext.close().catch(() => {});
       this.inputAudioContext = null;
     }
 
-    // Stop Speaker Output
+    // 4. Clean up Output Context
     this.stopAudioQueue();
     if (this.outputAudioContext) {
-      if (this.outputAudioContext.state !== 'closed') {
-        this.outputAudioContext.close().catch(() => {});
-      }
+      this.outputAudioContext.close().catch(() => {});
       this.outputAudioContext = null;
     }
 
@@ -128,10 +124,11 @@ export class LiveClient {
   }
 
   private async startAudioInput() {
-    if (!this.isConnected) return;
+    if (!this.isConnected || !this.session) return;
 
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      // Use 16kHz for Gemini Input
       this.inputAudioContext = new AudioContextClass({ sampleRate: 16000 });
       
       const stream = await navigator.mediaDevices.getUserMedia({ 
@@ -139,7 +136,8 @@ export class LiveClient {
           channelCount: 1, 
           sampleRate: 16000,
           echoCancellation: true,
-          noiseSuppression: true
+          noiseSuppression: true,
+          autoGainControl: true
         } 
       });
       this.mediaStream = stream;
@@ -161,7 +159,7 @@ export class LiveClient {
             }
           });
         } catch (err) {
-            console.warn("Failed to send audio", err);
+            // connection might have dropped
         }
       };
 
@@ -175,6 +173,7 @@ export class LiveClient {
 
     } catch (err) {
       console.error("Mic Access Error", err);
+      this.disconnect();
     }
   }
 
@@ -191,14 +190,13 @@ export class LiveClient {
         }
       });
     } catch (err) {
-       console.warn("Failed to send video frame", err);
+       // ignore drop
     }
   }
 
   private async handleServerMessage(message: LiveServerMessage) {
     const serverContent = message.serverContent;
 
-    // 1. Interruption
     if (serverContent?.interrupted) {
         console.log(">> Interrupted");
         this.stopAudioQueue();
@@ -208,7 +206,6 @@ export class LiveClient {
         return;
     }
 
-    // 2. Audio Processing
     const audioData = serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     if (audioData && this.outputAudioContext) {
       try {
