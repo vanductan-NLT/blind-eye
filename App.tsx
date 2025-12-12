@@ -153,7 +153,7 @@ const App: React.FC = () => {
           const guidance = await analyzeForNavigation(imageSrc);
           console.log("🗣️ Guidance:", guidance);
 
-          if (isNavigatingRef.current) {
+          if (isNavigatingRef.current && guidance) {
             setStatusText(guidance);
             speak(guidance, 'high'); // High priority - interrupt previous speech
           }
