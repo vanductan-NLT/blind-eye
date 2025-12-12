@@ -64,8 +64,8 @@ const analyzeQueryComplexity = (query: string): 'gemini-3-pro-preview' | 'gemini
   const lowerQuery = query.toLowerCase();
   const complexKeywords = [
     'read', 'scan', 'document', 'text', 'explain', 'analyze',
-    'compare', 'navigate to', 'plan', 'calculate', 'translate', 
-    'menu', 'receipt', 'book', 'sign', 'đọc', 'quét', 'tài liệu', 
+    'compare', 'navigate to', 'plan', 'calculate', 'translate',
+    'menu', 'receipt', 'book', 'sign', 'đọc', 'quét', 'tài liệu',
     'văn bản', 'giải thích', 'chi tiết'
   ];
   const isComplex = complexKeywords.some(k => lowerQuery.includes(k));
@@ -93,9 +93,44 @@ export const analyzeSmartAssistant = async (
     retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
   } : undefined;
 
-  const promptText = `You are a vision assistant for a blind person.
-User Query: "${userPrompt}"
-Rules: Be concise, actionable, and safe. Maximum 3 sentences.`;
+  // Context-aware prompt as a trusted friend
+  const getContextPrompt = (query: string): string => {
+    const q = query.toLowerCase();
+
+    // Reading request
+    if (q.includes('đọc') || q.includes('read') || q.includes('text') || q.includes('chữ')) {
+      return `Bạn là người bạn đang giúp đọc cho người khiếm thị.
+Yêu cầu: "${userPrompt}"
+Hãy đọc rõ ràng nội dung trong ảnh. Nếu có nhiều văn bản, đọc phần quan trọng nhất trước.`;
+    }
+
+    // Navigation/direction request
+    if (q.includes('đi') || q.includes('đường') || q.includes('where') || q.includes('direction') || q.includes('đâu')) {
+      return `Bạn là người bạn đồng hành của người khiếm thị.
+Câu hỏi: "${userPrompt}"
+Mô tả môi trường xung quanh và hướng dẫn di chuyển an toàn. Dùng hướng đồng hồ và khoảng cách cụ thể.`;
+    }
+
+    // Object identification
+    if (q.includes('cái gì') || q.includes('what') || q.includes('là gì') || q.includes('identify')) {
+      return `Bạn là đôi mắt của người khiếm thị.
+Câu hỏi: "${userPrompt}"
+Mô tả vật thể một cách cụ thể: tên, màu sắc, kích thước, vị trí. Nói ngắn gọn như nói với bạn thân.`;
+    }
+
+    // Default - general assistance
+    return `Bạn là người bạn thân đáng tin cậy của một người khiếm thị.
+Câu hỏi của họ: "${userPrompt}"
+
+Quy tắc trả lời:
+- Nói tự nhiên như nói chuyện với bạn thân
+- Mô tả cụ thể, hữu ích
+- Tập trung vào thông tin quan trọng nhất
+- Nếu liên quan đến di chuyển, dùng hướng đồng hồ (12h trước mặt, 3h bên phải, 9h bên trái)
+- Tối đa 3-4 câu`;
+  };
+
+  const promptText = getContextPrompt(userPrompt);
 
   try {
     const response = await ai.models.generateContent({
@@ -126,40 +161,53 @@ Rules: Be concise, actionable, and safe. Maximum 3 sentences.`;
 
 /**
  * CONTINUOUS NAVIGATION MODE
- * Optimized for complete sentences and reliability.
+ * Designed as a trusted companion for a blind person.
+ * Think: "What would I tell my blind friend walking beside me?"
  */
 export const analyzeForNavigation = async (base64Image: string): Promise<string> => {
   try {
     const ai = getAI();
     const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
-    // Use generateContent instead of stream to ensure we get a complete thought
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
           {
-            text: `You are a guide for the blind.
-Analyze this image for immediate navigation.
+            text: `Bạn là người bạn đồng hành đáng tin cậy của một người khiếm thị. Bạn đang đi bên cạnh họ và nhìn qua camera điện thoại của họ.
 
-OUTPUT RULES:
-1. MAX 15 words.
-2. MUST use complete sentences.
-3. Prioritize: Hazards > Path Status > Objects.
-4. Examples:
-   - "Path clear."
-   - "Stop. Wall ahead."
-   - "Chair on the left."
-   - "Stairs downward ahead."
+NHIỆM VỤ: Mô tả ngắn gọn những gì bạn thấy để giúp họ di chuyển an toàn.
 
-Output guidance:` 
+QUY TẮC BẮT BUỘC:
+1. Nói như đang nói chuyện với bạn thân - tự nhiên, ấm áp
+2. Ưu tiên: NGUY HIỂM > Chướng ngại vật > Đường đi > Môi trường xung quanh
+3. Sử dụng hướng đồng hồ: 12h (trước mặt), 3h (phải), 9h (trái), 6h (sau)
+4. Khoảng cách: số bước chân hoặc mét
+5. Mô tả mặt đất nếu có vấn đề: trơn, gồ ghề, có bậc, dốc
+6. Tối đa 2 câu ngắn
+
+VÍ DỤ TỐT:
+- "Đường thông thoáng, cứ đi thẳng nhé."
+- "Dừng lại! Có bậc thang đi xuống ngay trước mặt."
+- "Có ghế ở hướng 2h, cách 3 bước. Đi vòng bên trái."
+- "Cửa ra vào ở hướng 1h. Sàn trơn, đi cẩn thận."
+- "Có người đang đi tới từ hướng 10h."
+- "Tường ở ngay trước mặt, 2 bước nữa. Rẽ phải."
+
+VÍ DỤ XẤU (KHÔNG LÀM):
+- Mô tả quá dài dòng
+- Nói "tôi thấy..." hoặc "trong hình..."
+- Liệt kê tất cả mọi thứ trong ảnh
+- Không đưa ra hướng dẫn cụ thể
+
+Bây giờ, nhìn vào ảnh và hướng dẫn bạn của bạn:`
           }
         ]
       },
       config: {
-        temperature: 0.4, // Slightly higher to avoid repetitive loops, but still focused
-        maxOutputTokens: 256, // Increased to prevent mid-sentence cutoff
+        temperature: 0.5,
+        maxOutputTokens: 150,
       }
     });
 
@@ -168,20 +216,19 @@ Output guidance:`
 
     let finalSpeech = cleanTextForSpeech(text);
 
-    // Safety Clipper: If the string doesn't end with punctuation, trim to the last punctuation
-    // This handles cases where the model starts a new sentence but gets cut off
+    // Safety Clipper: trim incomplete sentences
     if (!/[.!?]$/.test(finalSpeech)) {
-        const lastPunctuation = Math.max(
-            finalSpeech.lastIndexOf('.'),
-            finalSpeech.lastIndexOf('!'),
-            finalSpeech.lastIndexOf('?')
-        );
-        if (lastPunctuation > 0) {
-            finalSpeech = finalSpeech.substring(0, lastPunctuation + 1);
-        }
+      const lastPunctuation = Math.max(
+        finalSpeech.lastIndexOf('.'),
+        finalSpeech.lastIndexOf('!'),
+        finalSpeech.lastIndexOf('?')
+      );
+      if (lastPunctuation > 0) {
+        finalSpeech = finalSpeech.substring(0, lastPunctuation + 1);
+      }
     }
 
-    return finalSpeech || "Scanning...";
+    return finalSpeech || "Đang quan sát...";
 
   } catch (error: any) {
     console.error("Navigation analyze error:", error);
