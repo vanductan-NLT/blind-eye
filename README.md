@@ -1,7 +1,7 @@
 <div align="center">
-<img width="1200" height="475" alt="Blind Eye Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+<img width="1200" height="475" alt="The Blind's Eyes Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 
-# 👁️ Blind Eye
+# 👁️ The Blind's Eyes
 
 ### AI-Powered Visual Companion for the Visually Impaired
 
@@ -16,7 +16,7 @@
 
 ## 🌟 Overview
 
-**Blind Eye** is a real-time AI-powered visual companion designed to assist visually impaired individuals in navigating their environment safely and independently. Using cutting-edge Google Gemini AI models, the app acts as a trusted friend walking beside the user, providing natural, conversational guidance about their surroundings.
+**The Blind's Eyes** is a real-time AI-powered visual companion designed to assist visually impaired individuals in navigating their environment safely and independently. Using cutting-edge Google Gemini AI models, the app acts as a trusted friend walking beside the user, providing natural, conversational guidance about their surroundings.
 
 ### 🎯 Key Features
 
