@@ -19,7 +19,7 @@ export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
                            
     if (preferredVoice) utterance.voice = preferredVoice;
 
-    utterance.rate = 1.25; 
+    utterance.rate = 1.1; // Reduced to 0.9 for a more relaxed, natural pace
     utterance.pitch = 1.0;
     
     // Add event handlers for debugging

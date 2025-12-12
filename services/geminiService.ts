@@ -257,13 +257,14 @@ Now, look at the image and guide your friend:`
       return finalSpeech || "Scanning...";
 
     } catch (error: any) {
-      // Check for 5xx server errors
+      // Check for 5xx server errors or 500 status codes
       const isServerError = (error.status && error.status >= 500) || 
+                            (error.code === 500) ||
                             (error.message && error.message.includes('500'));
 
       if (isServerError && attempt <= 3) {
-        // Exponential backoff: 500ms, 1000ms, 2000ms
-        const delay = 250 * Math.pow(2, attempt); 
+        // Exponential backoff: 250ms, 500ms, 1000ms
+        const delay = 250 * Math.pow(2, attempt - 1); 
         console.warn(`⚠️ Navigation 500 Error (Attempt ${attempt}). Retrying in ${delay}ms...`);
         
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -271,7 +272,7 @@ Now, look at the image and guide your friend:`
       }
       
       console.error("Navigation analyze error:", error);
-      return ""; // Fail gracefully
+      return ""; // Fail gracefully so the app loop continues
     }
   };
 
