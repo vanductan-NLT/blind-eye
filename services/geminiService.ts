@@ -72,7 +72,7 @@ const analyzeQueryComplexity = (query: string): 'gemini-3-pro-preview' | 'gemini
 };
 
 /**
- * Enhanced Smart Assistant Mode
+ * Enhanced Smart Assistant Mode with FAILOVER
  */
 export const analyzeSmartAssistant = async (
   base64Image: string,
@@ -82,15 +82,6 @@ export const analyzeSmartAssistant = async (
 ): Promise<string> => {
   const ai = getAI();
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
-
-  const tools: any[] = [];
-  if (modelName === 'gemini-3-pro-preview' && location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
-    tools.push({ googleMaps: {} });
-  }
-
-  const toolConfig = tools.length > 0 && location ? {
-    retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
-  } : undefined;
 
   // Context-aware prompt as a trusted friend (English)
   const getContextPrompt = (query: string): string => {
@@ -131,9 +122,10 @@ Response Rules:
 
   const promptText = getContextPrompt(userPrompt);
 
-  try {
-    const response = await ai.models.generateContent({
-      model: modelName,
+  // Helper to generate content with specific config
+  const callAI = async (model: string, tools: any[], toolConfig: any) => {
+    return await ai.models.generateContent({
+      model: model,
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
@@ -147,14 +139,40 @@ Response Rules:
         maxOutputTokens: 1000,
       }
     });
+  };
+
+  try {
+    // 1. Configure Tools (only for Pro models)
+    const tools: any[] = [];
+    if (modelName === 'gemini-3-pro-preview' && location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
+      tools.push({ googleMaps: {} });
+    }
+
+    const toolConfig = tools.length > 0 && location ? {
+      retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
+    } : undefined;
+
+    // 2. Primary Attempt
+    const response = await callAI(modelName, tools, toolConfig);
 
     if (!response.text) throw new Error("Empty response");
     return cleanTextForSpeech(response.text);
 
   } catch (error: any) {
-    if (error.toString().includes("quota")) return "Quota exceeded.";
-    console.error("Smart Assistant Error:", error);
-    return "I couldn't analyze that.";
+    console.warn(`⚠️ Primary model ${modelName} failed. Reason: ${error.message || error}`);
+
+    // 3. Fallback to Flash (Simpler, more robust, no tools)
+    try {
+      console.log("🔄 Retrying with Gemini 2.5 Flash...");
+      const fallbackResponse = await callAI('gemini-2.5-flash', [], undefined);
+      
+      if (!fallbackResponse.text) throw new Error("Fallback empty response");
+      return cleanTextForSpeech(fallbackResponse.text);
+
+    } catch (fallbackError: any) {
+      console.error("❌ Fallback failed:", fallbackError);
+      return "I'm having trouble connecting to my vision services right now.";
+    }
   }
 };
 

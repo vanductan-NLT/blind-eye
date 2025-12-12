@@ -23,7 +23,11 @@ export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
     utterance.pitch = 1.0;
     
     // Add event handlers for debugging
-    utterance.onerror = (e) => console.error("TTS Error:", e.error, e);
+    utterance.onerror = (e) => {
+        // Ignore expected interruptions (when we cancel speech to say something urgent)
+        if (e.error === 'interrupted' || e.error === 'canceled') return;
+        console.error("TTS Error:", e.error);
+    };
 
     window.speechSynthesis.speak(utterance);
   };
@@ -35,7 +39,12 @@ export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
         window.speechSynthesis.onvoiceschanged = null;
     };
   } else {
-    performSpeak();
+    // If high priority, give a tiny delay for the cancel() to register fully
+    if (priority === 'high') {
+        setTimeout(performSpeak, 50);
+    } else {
+        performSpeak();
+    }
   }
 };
 
