@@ -64,9 +64,8 @@ const analyzeQueryComplexity = (query: string): 'gemini-3-pro-preview' | 'gemini
   const lowerQuery = query.toLowerCase();
   const complexKeywords = [
     'read', 'scan', 'document', 'text', 'explain', 'analyze',
-    'compare', 'navigate to', 'plan', 'calculate', 'translate',
-    'menu', 'receipt', 'book', 'sign', 'đọc', 'quét', 'tài liệu',
-    'văn bản', 'giải thích', 'chi tiết'
+    'compare', 'navigate', 'plan', 'calculate', 'translate',
+    'menu', 'receipt', 'book', 'sign', 'detail', 'history'
   ];
   const isComplex = complexKeywords.some(k => lowerQuery.includes(k));
   return isComplex ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
@@ -93,41 +92,41 @@ export const analyzeSmartAssistant = async (
     retrievalConfig: { latLng: { latitude: location.latitude, longitude: location.longitude } }
   } : undefined;
 
-  // Context-aware prompt as a trusted friend
+  // Context-aware prompt as a trusted friend (English)
   const getContextPrompt = (query: string): string => {
     const q = query.toLowerCase();
 
     // Reading request
-    if (q.includes('đọc') || q.includes('read') || q.includes('text') || q.includes('chữ')) {
-      return `Bạn là người bạn đang giúp đọc cho người khiếm thị.
-Yêu cầu: "${userPrompt}"
-Hãy đọc rõ ràng nội dung trong ảnh. Nếu có nhiều văn bản, đọc phần quan trọng nhất trước.`;
+    if (q.includes('read') || q.includes('text') || q.includes('sign') || q.includes('book')) {
+      return `You are a reading assistant for a visually impaired user.
+Request: "${userPrompt}"
+Read the text clearly and naturally. If there is a lot of text, summarize the key information first.`;
     }
 
     // Navigation/direction request
-    if (q.includes('đi') || q.includes('đường') || q.includes('where') || q.includes('direction') || q.includes('đâu')) {
-      return `Bạn là người bạn đồng hành của người khiếm thị.
-Câu hỏi: "${userPrompt}"
-Mô tả môi trường xung quanh và hướng dẫn di chuyển an toàn. Dùng hướng đồng hồ và khoảng cách cụ thể.`;
+    if (q.includes('go') || q.includes('walk') || q.includes('way') || q.includes('direction') || q.includes('where')) {
+      return `You are a navigation companion for a visually impaired user.
+Question: "${userPrompt}"
+Describe the environment and guide them safely. Use clock-face directions (e.g., "door at 12 o'clock") and specific distances.`;
     }
 
     // Object identification
-    if (q.includes('cái gì') || q.includes('what') || q.includes('là gì') || q.includes('identify')) {
-      return `Bạn là đôi mắt của người khiếm thị.
-Câu hỏi: "${userPrompt}"
-Mô tả vật thể một cách cụ thể: tên, màu sắc, kích thước, vị trí. Nói ngắn gọn như nói với bạn thân.`;
+    if (q.includes('what') || q.includes('identify') || q.includes('look') || q.includes('see')) {
+      return `You are the eyes of a visually impaired user.
+Question: "${userPrompt}"
+Describe the object specifically: name, color, size, and position relative to the user. Be concise and natural.`;
     }
 
     // Default - general assistance
-    return `Bạn là người bạn thân đáng tin cậy của một người khiếm thị.
-Câu hỏi của họ: "${userPrompt}"
+    return `You are a trusted friend and visual assistant for a visually impaired user.
+User's Question: "${userPrompt}"
 
-Quy tắc trả lời:
-- Nói tự nhiên như nói chuyện với bạn thân
-- Mô tả cụ thể, hữu ích
-- Tập trung vào thông tin quan trọng nhất
-- Nếu liên quan đến di chuyển, dùng hướng đồng hồ (12h trước mặt, 3h bên phải, 9h bên trái)
-- Tối đa 3-4 câu`;
+Response Rules:
+- Speak naturally and warmly, like a friend.
+- Be specific and helpful.
+- Focus on the most important visual information.
+- If relevant to movement, use clock-face directions (12 o'clock ahead, 3 o'clock right, 9 o'clock left).
+- Maximum 3-4 short sentences.`;
   };
 
   const promptText = getContextPrompt(userPrompt);
@@ -175,33 +174,32 @@ export const analyzeForNavigation = async (base64Image: string): Promise<string>
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
           {
-            text: `Bạn là người bạn đồng hành đáng tin cậy của một người khiếm thị. Bạn đang đi bên cạnh họ và nhìn qua camera điện thoại của họ.
+            text: `You are a trusted guide walking beside a blind person. You are seeing through their camera.
 
-NHIỆM VỤ: Mô tả ngắn gọn những gì bạn thấy để giúp họ di chuyển an toàn.
+MISSION: Briefly describe what you see to help them navigate safely.
 
-QUY TẮC BẮT BUỘC:
-1. Nói như đang nói chuyện với bạn thân - tự nhiên, ấm áp
-2. Ưu tiên: NGUY HIỂM > Chướng ngại vật > Đường đi > Môi trường xung quanh
-3. Sử dụng hướng đồng hồ: 12h (trước mặt), 3h (phải), 9h (trái), 6h (sau)
-4. Khoảng cách: số bước chân hoặc mét
-5. Mô tả mặt đất nếu có vấn đề: trơn, gồ ghề, có bậc, dốc
-6. Tối đa 2 câu ngắn
+MANDATORY RULES:
+1. Speak naturally, like a friend.
+2. PRIORITY: HAZARDS > Obstacles > Clear Path > Surroundings.
+3. Use clock directions: 12 o'clock (straight), 3 o'clock (right), 9 o'clock (left).
+4. Distance: Use steps or meters.
+5. Mention floor conditions if relevant (wet, uneven, steps).
+6. MAX 2 short sentences.
 
-VÍ DỤ TỐT:
-- "Đường thông thoáng, cứ đi thẳng nhé."
-- "Dừng lại! Có bậc thang đi xuống ngay trước mặt."
-- "Có ghế ở hướng 2h, cách 3 bước. Đi vòng bên trái."
-- "Cửa ra vào ở hướng 1h. Sàn trơn, đi cẩn thận."
-- "Có người đang đi tới từ hướng 10h."
-- "Tường ở ngay trước mặt, 2 bước nữa. Rẽ phải."
+GOOD EXAMPLES:
+- "Path is clear, keep going straight."
+- "Stop! Stairs going down right in front of you."
+- "There is a chair at 2 o'clock, about 3 steps away. Bear left."
+- "Doorway at 1 o'clock. Floor looks slippery."
+- "Person approaching from 10 o'clock."
+- "Wall directly ahead. Turn right."
 
-VÍ DỤ XẤU (KHÔNG LÀM):
-- Mô tả quá dài dòng
-- Nói "tôi thấy..." hoặc "trong hình..."
-- Liệt kê tất cả mọi thứ trong ảnh
-- Không đưa ra hướng dẫn cụ thể
+BAD EXAMPLES:
+- "I see a..."
+- Long descriptions.
+- No directional guidance.
 
-Bây giờ, nhìn vào ảnh và hướng dẫn bạn của bạn:`
+Now, look at the image and guide your friend:`
           }
         ]
       },
@@ -228,7 +226,7 @@ Bây giờ, nhìn vào ảnh và hướng dẫn bạn của bạn:`
       }
     }
 
-    return finalSpeech || "Đang quan sát...";
+    return finalSpeech || "Scanning...";
 
   } catch (error: any) {
     console.error("Navigation analyze error:", error);
