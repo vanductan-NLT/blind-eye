@@ -47,9 +47,42 @@ export const useSpeechRecognition = (onCommand: (command: string) => void) => {
       recognition.onresult = (event: any) => {
         const lastResultIndex = event.results.length - 1;
         if (event.results[lastResultIndex].isFinal) {
-          const transcript = event.results[lastResultIndex][0].transcript.trim().toLowerCase();
-          console.log("Recognized:", transcript);
-          onCommand(transcript);
+          let transcript = event.results[lastResultIndex][0].transcript.trim();
+          
+          // Enhanced transcription processing
+          // Clean up common transcription errors
+          transcript = transcript
+            .replace(/\b(stop|top|shop)\b/gi, 'stop') // Common misrecognitions
+            .replace(/\b(left|right|write|ride)\b/gi, '$1') // Direction commands
+            .replace(/\b(where|wear)\b/gi, 'where') // Location questions
+            .replace(/\b(navigate|navigation)\b/gi, 'navigate') // Navigation commands
+            .replace(/\b(what's|what is)\b/gi, 'what is') // Object identification
+            .replace(/\b(read|need|need to)\b/gi, 'read') // Reading commands
+            .replace(/\b(safe|danger|obstacle)\b/gi, 'safe') // Safety commands
+            .toLowerCase();
+          
+          console.log("Enhanced Recognized:", transcript);
+          
+          // Enhanced command validation
+          if (transcript.length > 0) {
+            // Filter out empty or too short commands
+            if (transcript.length < 2) {
+              console.log("Command too short, ignoring");
+              return;
+            }
+            
+            // Validate command contains meaningful content
+            const meaningfulWords = transcript.split(' ').filter(word =>
+              word.length > 1 && !['the', 'a', 'an', 'is', 'are'].includes(word)
+            );
+            
+            if (meaningfulWords.length === 0) {
+              console.log("No meaningful words detected, ignoring");
+              return;
+            }
+            
+            onCommand(transcript);
+          }
         }
       };
 
