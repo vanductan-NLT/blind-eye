@@ -184,7 +184,8 @@ MANDATORY RULES:
 3. Use clock directions: 12 o'clock (straight), 3 o'clock (right), 9 o'clock (left).
 4. Distance: Use steps or meters.
 5. Mention floor conditions if relevant (wet, uneven, steps).
-6. MAX 2 short sentences.
+6. ALWAYS finish your sentences.
+7. MAX 2 short sentences.
 
 GOOD EXAMPLES:
 - "Path is clear, keep going straight."
@@ -198,6 +199,7 @@ BAD EXAMPLES:
 - "I see a..."
 - Long descriptions.
 - No directional guidance.
+- "The path ahead" (incomplete)
 
 Now, look at the image and guide your friend:`
           }
@@ -205,7 +207,8 @@ Now, look at the image and guide your friend:`
       },
       config: {
         temperature: 0.5,
-        maxOutputTokens: 150,
+        // Increased from 150 to 512 to prevent truncated sentences
+        maxOutputTokens: 512,
       }
     });
 
@@ -215,6 +218,8 @@ Now, look at the image and guide your friend:`
     let finalSpeech = cleanTextForSpeech(text);
 
     // Safety Clipper: trim incomplete sentences
+    // This logic removes trailing text if it doesn't end in punctuation, 
+    // ensuring we don't speak half-thoughts if the model *does* still cut off.
     if (!/[.!?]$/.test(finalSpeech)) {
       const lastPunctuation = Math.max(
         finalSpeech.lastIndexOf('.'),
