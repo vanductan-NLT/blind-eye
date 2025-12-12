@@ -73,6 +73,7 @@ const analyzeQueryComplexity = (query: string): 'gemini-3-pro-preview' | 'gemini
 
 /**
  * Enhanced Smart Assistant Mode with FAILOVER
+ * Token limit increased to 2048 to ensure complete sentences.
  */
 export const analyzeSmartAssistant = async (
   base64Image: string,
@@ -91,21 +92,24 @@ export const analyzeSmartAssistant = async (
     if (q.includes('read') || q.includes('text') || q.includes('sign') || q.includes('book')) {
       return `You are a reading assistant for a visually impaired user.
 Request: "${userPrompt}"
-Read the text clearly and naturally. If there is a lot of text, summarize the key information first.`;
+Read the text clearly and naturally. If there is a lot of text, summarize the key information first.
+CRITICAL: ALWAYS finish your last sentence. Do not cut off.`;
     }
 
     // Navigation/direction request
     if (q.includes('go') || q.includes('walk') || q.includes('way') || q.includes('direction') || q.includes('where')) {
       return `You are a navigation companion for a visually impaired user.
 Question: "${userPrompt}"
-Describe the environment and guide them safely. Use clock-face directions (e.g., "door at 12 o'clock") and specific distances.`;
+Describe the environment and guide them safely. Use clock-face directions (e.g., "door at 12 o'clock") and specific distances.
+CRITICAL: ALWAYS finish your last sentence.`;
     }
 
     // Object identification
     if (q.includes('what') || q.includes('identify') || q.includes('look') || q.includes('see')) {
       return `You are the eyes of a visually impaired user.
 Question: "${userPrompt}"
-Describe the object specifically: name, color, size, and position relative to the user. Be concise and natural.`;
+Describe the object specifically: name, color, size, and position relative to the user. Be concise and natural.
+CRITICAL: ALWAYS finish your last sentence.`;
     }
 
     // Default - general assistance
@@ -117,7 +121,8 @@ Response Rules:
 - Be specific and helpful.
 - Focus on the most important visual information.
 - If relevant to movement, use clock-face directions (12 o'clock ahead, 3 o'clock right, 9 o'clock left).
-- Maximum 3-4 short sentences.`;
+- Maximum 3-4 sentences.
+- CRITICAL: ALWAYS finish your last sentence. Do not cut off.`;
   };
 
   const promptText = getContextPrompt(userPrompt);
@@ -136,7 +141,8 @@ Response Rules:
         tools: tools.length > 0 ? tools : undefined,
         toolConfig: toolConfig,
         temperature: 0.5,
-        maxOutputTokens: 1000,
+        // Increased to 2048 to prevent truncated sentences for "Ask AI" queries
+        maxOutputTokens: 2048, 
       }
     });
   };
@@ -225,7 +231,7 @@ Now, look at the image and guide your friend:`
       },
       config: {
         temperature: 0.5,
-        // Increased from 150 to 512 to prevent truncated sentences
+        // Increased from 150 to 512 to prevent truncated sentences in navigation
         maxOutputTokens: 512,
       }
     });
@@ -235,9 +241,7 @@ Now, look at the image and guide your friend:`
 
     let finalSpeech = cleanTextForSpeech(text);
 
-    // Safety Clipper: trim incomplete sentences
-    // This logic removes trailing text if it doesn't end in punctuation, 
-    // ensuring we don't speak half-thoughts if the model *does* still cut off.
+    // Safety Clipper: trim incomplete sentences if the model fails to obey instructions
     if (!/[.!?]$/.test(finalSpeech)) {
       const lastPunctuation = Math.max(
         finalSpeech.lastIndexOf('.'),
