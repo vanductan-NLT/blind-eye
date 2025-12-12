@@ -24,13 +24,13 @@ const cleanTextForSpeech = (text: string): string => {
 
 /**
  * ENHANCED DECISION ENGINE: Uses Flash to intelligently route the query.
- * Returns 'gemini-2.0-flash-thinking-exp' (Gemini 3) for complex tasks, 'gemini-2.5-flash' for simple ones.
+ * Returns 'gemini-3-pro-preview' (Gemini 3) for complex tasks, 'gemini-2.5-flash' for simple ones.
  * 
  * ROUTING STRATEGY:
- * - Flash (2.5): Hội thoại nhanh, quyết định tức thì, nhận diện đơn giản
- * - Gemini 3 (2.0 Flash Thinking): Scan tài liệu, đọc văn bản, phân tích phức tạp, reasoning sâu
+ * - Flash (2.5): Fast conversation, instant decisions, simple recognition
+ * - Gemini 3 (Pro): Document scanning, text reading, complex analysis, deep reasoning
  */
-export const selectBestModelForQuery = async (query: string): Promise<'gemini-2.0-flash-thinking-exp' | 'gemini-2.5-flash'> => {
+export const selectBestModelForQuery = async (query: string): Promise<'gemini-3-pro-preview' | 'gemini-2.5-flash'> => {
   try {
     const ai = getAI();
     const response = await ai.models.generateContent({
@@ -94,7 +94,7 @@ Examples:
 
     // Enhanced validation and fallback logic
     if (decision?.includes("GEMINI3") || decision?.includes("PRO")) {
-      return 'gemini-2.0-flash-thinking-exp';
+      return 'gemini-3-pro-preview';
     } else if (decision?.includes("FLASH")) {
       return 'gemini-2.5-flash';
     } else {
@@ -111,7 +111,7 @@ Examples:
 /**
  * Fallback complexity analyzer when API routing fails
  */
-const analyzeQueryComplexity = (query: string): 'gemini-2.0-flash-thinking-exp' | 'gemini-2.5-flash' => {
+const analyzeQueryComplexity = (query: string): 'gemini-3-pro-preview' | 'gemini-2.5-flash' => {
   const lowerQuery = query.toLowerCase();
 
   // Complex task keywords (English + Vietnamese)
@@ -139,7 +139,7 @@ const analyzeQueryComplexity = (query: string): 'gemini-2.0-flash-thinking-exp' 
   const documentPatterns = /read|scan|document|text|sign|label|menu|book|paper|đọc|quét|tài liệu|biển|sách/i;
   const hasDocumentPattern = documentPatterns.test(lowerQuery);
 
-  return (hasComplexKeyword || hasDocumentPattern) ? 'gemini-2.0-flash-thinking-exp' : 'gemini-2.5-flash';
+  return (hasComplexKeyword || hasDocumentPattern) ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
 };
 
 /**
@@ -149,14 +149,14 @@ const analyzeQueryComplexity = (query: string): 'gemini-2.0-flash-thinking-exp' 
 export const analyzeSmartAssistant = async (
   base64Image: string,
   userPrompt: string,
-  modelName: 'gemini-2.0-flash-thinking-exp' | 'gemini-2.5-flash',
+  modelName: 'gemini-3-pro-preview' | 'gemini-2.5-flash',
   location?: GeoLocation
 ): Promise<string> => {
   const ai = getAI();
   const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
   const tools: any[] = [];
-  if (modelName === 'gemini-2.0-flash-thinking-exp' && location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
+  if (modelName === 'gemini-3-pro-preview' && location && (userPrompt.toLowerCase().includes("where") || userPrompt.toLowerCase().includes("location"))) {
     // Only Gemini 3 supports tools reliably in this context
     tools.push({ googleMaps: {} });
   }
@@ -260,6 +260,7 @@ Be their eyes, not a tour guide.`;
 
   } catch (error: any) {
     if (error.toString().includes("quota")) return "Quota exceeded. Please try again.";
+    console.error("Smart Assistant Error:", error);
     return "I couldn't analyze that clearly.";
   }
 };
@@ -275,8 +276,9 @@ export const analyzeForNavigation = async (base64Image: string): Promise<string>
     const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
     // Use streaming like Android app for faster response
+    // CHANGED: gemini-1.5-flash (deprecated) -> gemini-2.5-flash
     const stream = await ai.models.generateContentStream({
-      model: 'gemini-1.5-flash', // Faster model for real-time navigation
+      model: 'gemini-2.5-flash',
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },

@@ -23,7 +23,7 @@ export const speak = (text: string, priority: 'high' | 'normal' = 'normal') => {
     utterance.pitch = 1.0;
     
     // Add event handlers for debugging
-    utterance.onerror = (e) => console.error("TTS Error:", e);
+    utterance.onerror = (e) => console.error("TTS Error:", e.error, e);
 
     window.speechSynthesis.speak(utterance);
   };

@@ -149,7 +149,7 @@ const App: React.FC = () => {
             continue;
           }
 
-          console.log("� Analyzing frame for navigation...");
+          console.log("👀 Analyzing frame for navigation...");
           const guidance = await analyzeForNavigation(imageSrc);
           console.log("🗣️ Guidance:", guidance);
 
@@ -223,9 +223,9 @@ const App: React.FC = () => {
       console.log("✅ Selected model:", selectedModel);
 
       // Check if using Gemini 3 (complex model)
-      const isGemini3 = selectedModel.includes("thinking") || selectedModel.includes("2.0");
+      const isGemini3 = selectedModel.includes("pro") || selectedModel.includes("3");
       setIsProMode(isGemini3);
-      setStatusText(isGemini3 ? "Gemini 3 Thinking..." : "Flash Speed...");
+      setStatusText(isGemini3 ? "Gemini 3 Pro..." : "Flash Speed...");
 
       // 2. Analysis (Flash/Gemini 3) with real location
       console.log("🧠 Analyzing with", selectedModel);

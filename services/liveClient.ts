@@ -1,10 +1,9 @@
-import { GoogleGenAI, LiveServerMessage } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { base64ToUint8Array, decodeAudioData, float32ToB64PCM } from "./audioUtils";
 
 const API_KEY = process.env.API_KEY || "";
-// Correct model for Gemini Live API (bidiGenerateContent)
-// Options: gemini-2.0-flash-exp, gemini-2.0-flash-live-preview-04-09
-const MODEL_NAME = "gemini-2.0-flash-exp";
+// Correct model for Gemini Live API (Native Audio)
+const MODEL_NAME = "gemini-2.5-flash-native-audio-preview-09-2025";
 
 console.log("🔑 API Key loaded:", API_KEY ? `${API_KEY.substring(0, 10)}...` : "MISSING!");
 
@@ -50,50 +49,8 @@ export class LiveClient {
       this.session = await this.ai.live.connect({
         model: MODEL_NAME,
         config: {
-          responseModalities: ['audio'] as any,
-          systemInstruction: `You are an advanced navigation assistant designed to help visually impaired individuals navigate various environments safely and efficiently.Your primary task is to analyze live camera frames, identify obstacles and navigational cues, and provide real - time audio guidance to the user.
-
-Main considerations:
-- Always identify specific objects in the frames with details like color, size, and specifications
-  - Provide short, actionable guidance that the user can easily follow
-    - Focus on what the user should do, such as "Stop," "Turn right," or "Step over"
-      - Prioritize user safety in every response
-        - Keep responses brief(3 - 4 sentences maximum) but detailed
-
-Environmental Awareness:
-- Always begin by informing the user about their surroundings, including specific objects, their colors, and significant landmarks
-  - Ensure the user is aware of important details such as whether they are on a road, sidewalk, or in a crowded area
-
-Urban Environments(Cities, Highways, City Roads):
-- Stairs: Identify and inform about stairs, including their direction(up / down)
-  - Curbs: Describe curbs with details like height and location
-    - Uneven Surfaces: Warn about uneven terrain and provide appropriate guidance
-      - Obstructions: Point out obstacles like poles, benches, or low - hanging branches and suggest how to avoid them
-        - Crosswalks: Guide the user on safe crossing at crosswalks
-          - Sidewalks: Ensure the user stays on safe walking paths
-            - Traffic: Warn about approaching vehicles and suggest when it's safe to proceed
-              - People: Notify the user about other pedestrians and their movement
-
-Natural Environments(Jungles, Villages, Grounds):
-- Natural Obstacles: Guide around trees, roots, rocks, etc.
-- Water Bodies: Inform about nearby streams, ponds, or puddles
-  - Terrain Variations: Warn about slippery or uneven terrain
-    - Trails: Keep the user on safe trails and paths
-      - Landmarks: Use natural landmarks for orientation
-
-Indoor Environments(Offices, Homes):
-  - Furniture: Warn about tables, chairs, and other obstacles
-    - Doors / Stairs: Guide the user through doors and up / down stairs
-      - Rooms / Hallways: Provide directions within indoor environments
-        - Objects / Appliances: Identify important objects and provide usage tips
-
-Safety and Comfort:
-- If you see immediate danger, warn urgently with "STOP" followed by the danger
-  - If the path is clear and safe, say "Path Clear"
-    - Always provide reassurance and positive feedback to build the user's confidence
-      - Adapt to new environments and provide contextual guidance
-
-Speak clearly and at a moderate pace. Be concise but thorough in your descriptions.`,
+          responseModalities: [Modality.AUDIO],
+          systemInstruction: "You are a real-time navigation guide for the blind. 1. Speak immediately when you see this prompt. Say 'Navigation Ready'. 2. Warn of obstacles instantly. 3. Use clock face directions (e.g., 'Door at 12 o'clock'). 4. Be concise.",
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } }
           }
@@ -103,43 +60,25 @@ Speak clearly and at a moderate pace. Be concise but thorough in your descriptio
             console.log(">> Gemini Live Connected - Session started!");
             this.isConnected = true;
             this.startAudioInput();
-
-            // Send initial prompt to trigger Gemini to start speaking
-            setTimeout(() => {
-              if (this.session && this.isConnected) {
-                console.log(">> Sending initial prompt...");
-                this.session.sendRealtimeInput({
-                  text: "Hello! I need your help navigating. Please start describing what you see in the camera and guide me. Keep responses short - 2-3 sentences max."
-                });
-              }
-            }, 1000);
           },
           onmessage: (msg: LiveServerMessage) => {
-            console.log(">> Received message from Gemini:", msg);
             this.handleServerMessage(msg);
           },
           onclose: (event: any) => {
-            console.log(">> Gemini Live Closed - Reason:", event?.reason || "Unknown");
-            console.log(">> Close event:", event);
+            console.log(">> Gemini Live Closed");
             this.isConnected = false;
             this.disconnect();
           },
           onerror: (err: any) => {
             console.error(">> Gemini Live Error:", err);
-            console.error(">> Error details:", JSON.stringify(err, null, 2));
             this.callbacks.onStatusChange('error');
             this.disconnect();
           }
         }
       });
 
-      console.log(">> Session created:", this.session);
-
     } catch (error: any) {
       console.error("❌ Connection failed:", error);
-      console.error("❌ Error message:", error?.message);
-      console.error("❌ Error stack:", error?.stack);
-      console.error("Connection failed", error);
       this.callbacks.onStatusChange('error');
       this.disconnect();
     }
@@ -265,13 +204,6 @@ Speak clearly and at a moderate pace. Be concise but thorough in your descriptio
   private async handleServerMessage(message: LiveServerMessage) {
     const serverContent = message.serverContent;
 
-    // Log what we're receiving
-    console.log(">> Message type:", message.setupComplete ? "setupComplete" : "content");
-
-    if (serverContent) {
-      console.log(">> Server content:", JSON.stringify(serverContent).substring(0, 200));
-    }
-
     if (serverContent?.interrupted) {
       console.log(">> Interrupted");
       this.stopAudioQueue();
@@ -284,13 +216,7 @@ Speak clearly and at a moderate pace. Be concise but thorough in your descriptio
     const audioData = serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     const textData = serverContent?.modelTurn?.parts?.[0]?.text;
 
-    // Log text if present
-    if (textData) {
-      console.log(">> Text response:", textData);
-    }
-
     if (audioData && this.outputAudioContext) {
-      console.log(">> 🔊 Audio data received, length:", audioData.length);
       try {
         const audioBytes = base64ToUint8Array(audioData);
         const audioBuffer = await decodeAudioData(audioBytes, this.outputAudioContext);
@@ -306,7 +232,6 @@ Speak clearly and at a moderate pace. Be concise but thorough in your descriptio
 
         this.audioQueue.push(source);
         this.nextStartTime += audioBuffer.duration;
-        console.log(">> 🔊 Audio scheduled to play");
       } catch (e) {
         console.error("Audio Decode Error", e);
       }
