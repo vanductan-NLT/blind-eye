@@ -233,7 +233,7 @@ Now, look at the image and guide your friend:`
         },
         config: {
           temperature: 0.5,
-          maxOutputTokens: 512,
+          maxOutputTokens: 8192, // Increased from 512 for fullest answer
         }
       });
 
