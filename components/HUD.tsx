@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Eye, Mic, Navigation, MicOff, Sparkles, Play, Square, BrainCircuit } from 'lucide-react';
+import { Mic, Play, Square } from 'lucide-react';
 import { AppMode } from '../types';
 
 interface HUDProps {
@@ -17,27 +17,7 @@ export const HUD: React.FC<HUDProps> = ({ mode, lastMessage, isListening, onMicC
   const isReading = mode === AppMode.READING; // Interaction Mode (Analysis)
   
   return (
-    <div className="absolute inset-0 z-10 flex flex-col justify-between pointer-events-none p-6">
-      {/* Top Bar: Status */}
-      <div className="flex justify-between items-start">
-        <div className={`px-4 py-2 rounded-full backdrop-blur-md border shadow-lg transition-colors ${
-            isNavigating ? 'bg-green-500/20 border-green-400 text-green-400' : 
-            isReading ? 'bg-purple-500/20 border-purple-400 text-purple-400' : 
-            'bg-slate-900/60 border-slate-600 text-slate-400'
-          }`}>
-          <div className="flex items-center gap-2 font-mono font-bold uppercase text-sm tracking-wider">
-            {isNavigating ? <Activity className="animate-pulse w-4 h-4" /> : 
-             isReading ? (isProMode ? <BrainCircuit className="animate-pulse w-4 h-4" /> : <Sparkles className="animate-pulse w-4 h-4" />) : 
-             <Navigation className="w-4 h-4" />}
-            
-            {/* Dynamic Label */}
-            {isNavigating ? "LIVE GUIDE ACTIVE" : 
-             isReading ? (isProMode ? "DEEP ANALYSIS" : "ASSISTANT PROCESSING") : 
-             "STANDBY"}
-          </div>
-        </div>
-      </div>
-
+    <div className="absolute inset-0 z-10 flex flex-col justify-end pointer-events-none p-6">
       {/* Center: Reticle */}
       <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-72 h-72 transition-all duration-500 ${isListening || isNavigating ? 'scale-100 opacity-80' : 'scale-90 opacity-30'}`}>
         <div className={`w-full h-full border border-white/20 rounded-lg relative ${isNavigating ? 'border-green-500/30' : ''}`}>
