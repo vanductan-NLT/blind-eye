@@ -185,20 +185,22 @@ Response Rules:
 /**
  * CONTINUOUS NAVIGATION MODE
  * Designed as a trusted companion for a blind person.
- * Think: "What would I tell my blind friend walking beside me?"
+ * Includes Retry Logic for 500 Errors.
  */
 export const analyzeForNavigation = async (base64Image: string): Promise<string> => {
-  try {
-    const ai = getAI();
-    const cleanBase64 = base64Image.split(',')[1] || base64Image;
+  const ai = getAI();
+  const cleanBase64 = base64Image.split(',')[1] || base64Image;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: {
-        parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-          {
-            text: `You are a trusted guide walking beside a blind person. You are seeing through their camera.
+  // Retry wrapper for 500 errors with attempt counting
+  const generateWithRetry = async (attempt: number = 1): Promise<string> => {
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: {
+          parts: [
+            { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
+            {
+              text: `You are a trusted guide walking beside a blind person. You are seeing through their camera.
 
 MISSION: Briefly describe what you see to help them navigate safely.
 
@@ -226,37 +228,52 @@ BAD EXAMPLES:
 - "The path ahead" (incomplete)
 
 Now, look at the image and guide your friend:`
-          }
-        ]
-      },
-      config: {
-        temperature: 0.5,
-        // Increased from 150 to 512 to prevent truncated sentences in navigation
-        maxOutputTokens: 512,
+            }
+          ]
+        },
+        config: {
+          temperature: 0.5,
+          maxOutputTokens: 512,
+        }
+      });
+
+      const text = response.text?.trim();
+      if (!text) return "";
+
+      let finalSpeech = cleanTextForSpeech(text);
+
+      // Safety Clipper: trim incomplete sentences if the model fails to obey instructions
+      if (!/[.!?]$/.test(finalSpeech)) {
+        const lastPunctuation = Math.max(
+          finalSpeech.lastIndexOf('.'),
+          finalSpeech.lastIndexOf('!'),
+          finalSpeech.lastIndexOf('?')
+        );
+        if (lastPunctuation > 0) {
+          finalSpeech = finalSpeech.substring(0, lastPunctuation + 1);
+        }
       }
-    });
 
-    const text = response.text?.trim();
-    if (!text) return "";
+      return finalSpeech || "Scanning...";
 
-    let finalSpeech = cleanTextForSpeech(text);
+    } catch (error: any) {
+      // Check for 5xx server errors
+      const isServerError = (error.status && error.status >= 500) || 
+                            (error.message && error.message.includes('500'));
 
-    // Safety Clipper: trim incomplete sentences if the model fails to obey instructions
-    if (!/[.!?]$/.test(finalSpeech)) {
-      const lastPunctuation = Math.max(
-        finalSpeech.lastIndexOf('.'),
-        finalSpeech.lastIndexOf('!'),
-        finalSpeech.lastIndexOf('?')
-      );
-      if (lastPunctuation > 0) {
-        finalSpeech = finalSpeech.substring(0, lastPunctuation + 1);
+      if (isServerError && attempt <= 3) {
+        // Exponential backoff: 500ms, 1000ms, 2000ms
+        const delay = 250 * Math.pow(2, attempt); 
+        console.warn(`⚠️ Navigation 500 Error (Attempt ${attempt}). Retrying in ${delay}ms...`);
+        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return generateWithRetry(attempt + 1);
       }
+      
+      console.error("Navigation analyze error:", error);
+      return ""; // Fail gracefully
     }
+  };
 
-    return finalSpeech || "Scanning...";
-
-  } catch (error: any) {
-    console.error("Navigation analyze error:", error);
-    return "";
-  }
+  return generateWithRetry();
 };
